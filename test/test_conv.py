@@ -1,6 +1,9 @@
 import unittest
 import numpy as np
 from tinygrad.tensor import Tensor
+import pytest
+
+pytestmark = [pytest.mark.exclude_cuda]
 
 class TestConv(unittest.TestCase):
   def test_simple(self):
