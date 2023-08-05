@@ -89,17 +89,6 @@ def kernel_optimize(k:Linearizer, create_k:Callable[[], Linearizer], to_prg):
   if global_db is not None and skey in global_db:
     print('loading kopt from cache')
     choice = global_db[skey]
-    if choice == 'BASELINE':
-      print('baseline choice')
-      keys = [(typ, axis) for axis in range(k.first_reduce) for typ in 'UL']
-      if k.reduceop is not None:
-        keys += [('R', axis) for axis in range(k.first_reduce, k.shape_len)]
-      suggestion = dict.fromkeys(keys, 1)
-      override_opt = [(0, 6, 'U'), (1, 6, 'U'), (2, 4, 'U'), (2, 8, 'L'), (3, 8, 'L'), (4, 4, 'L')]
-      override_opt = [(0, 6, 'U'), (1, 6, 'U'), (4, 16, 'L')]
-      for i, s, typ in override_opt:
-        suggestion[typ, i] = s
-      choice = tuple([(axis, suggestion[(typ, axis)], typ) for (typ, axis) in keys])
 
   else:
     # get baseline
