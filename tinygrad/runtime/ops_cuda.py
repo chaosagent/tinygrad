@@ -53,8 +53,13 @@ else:
 
 class CUDAProgram:
   def __init__(self, name:str, prg:str, binary=False):
+    if DEBUG >= 2:
+      fn = os.path.join(tempfile.gettempdir(), f"tinycuda_{hashlib.md5(prg.encode('utf-8')).hexdigest()}")
+      with open(fn + ".cu", "wb") as f:
+        f.write(prg.encode('utf-8'))
+        print(fn)
     if not binary:
-      try: prg = cuda_compile(prg, target="ptx", no_extern_c=True, options=['-Wno-deprecated-gpu-targets']).decode('utf-8')
+      try: prg = cuda_compile(prg, target="ptx", no_extern_c=True, options=['-Wno-deprecated-gpu-targets', '-lineinfo']).decode('utf-8')
       except cuda.CompileError as e:
         if DEBUG >= 3: print("FAILED TO BUILD", prg)
         raise e

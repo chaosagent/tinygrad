@@ -204,6 +204,12 @@ class ShapeTracker:
   def needs_valid(self) -> bool:
     return any(v.mask is not None for v in self.views)
 
+  def axis_needs_valid(self, axis) -> bool:
+    idx, valid = self.expr_idxs()
+    valid_render = valid.render()
+    return f'idx{axis}' in valid_render # lmaoooo
+    return any([v.mask is not None and v.mask[axis] != (0, v.shape[axis]) for v in self.views])
+
   # *** under this line are the movement ops ***
 
   def __unsafe_resize(self, arg: Tuple[Tuple[int, int], ...], mask=None):
