@@ -26,7 +26,8 @@ class HIPProgram:
       if not binary:
         prog = hip.hiprtcCreateProgram(prg, name, [], [])
         device_properties = hip.hipGetDeviceProperties(hip.hipGetDevice())
-        hip.hiprtcCompileProgram(prog, [f'--offload-arch={device_properties.gcnArchName}'])
+        debug_args = ['-g', '--save-temps', '-O3'] if DEBUG >= 6 else []
+        hip.hiprtcCompileProgram(prog, [f'--offload-arch={device_properties.gcnArchName}'] + debug_args)
         prg = hip.hiprtcGetCode(prog)
     except Exception as e:
       if DEBUG >= 3: print("FAILED TO BUILD", prg)

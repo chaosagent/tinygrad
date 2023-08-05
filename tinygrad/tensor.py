@@ -718,16 +718,16 @@ class Tensor:
       x = self.pad2d(padding_)._pool(HWI, HWO, dilation)  # double stride for winograd kernel granularity
       rcout, oyxi = cout // groups, x.shape[2:-len(HWI)]
 
-      # (bs, groups, cin, oyx4, HW4)
-      x = x.permute(*[len(x.shape) - len(HWI) + i for i in range(len(HWI))], *[i for i in range(len(x.shape) - 2)])  # move HW to the front
-      g = weight.reshape(1, groups, rcout, cin, *[1 for _ in range(len(oyxi))], *HW)
-      g = g.permute(*[len(g.shape) - len(HWI) + i for i in range(len(HWI))], *[i for i in range(len(g.shape) - 2)])  # move HW to the front
+      # x: (bs, groups, cin, oyx4, HW4)
+      x = x.permute(*list(range(len(x.shape)-len(HW),len(x.shape))), *list(range(len(x.shape)-len(HW))))  # move HW to the front
+      g = weight.reshape(1, groups, rcout, cin, *([1]*len(oyxi)), *HW)
+      g = g.permute(*list(range(len(g.shape)-len(HW),len(g.shape))), *list(range(len(g.shape)-len(HW))))  # move HW to the front
 
       # x: (HW4, bs, groups, cin, oyx4)
 
       # compute 6x6 g
       def compute_g(g_, dim=0):
-        if dim == 2:
+        if dim == len(HW):
           return g_
         g0 = compute_g(g_[0]/4, dim=dim + 1)
         g1 = compute_g(-(g_[0] + g_[1] + g_[2]) / 6, dim=dim + 1)
@@ -740,10 +740,8 @@ class Tensor:
       gfactors = compute_g(g).realize()  # (HW4, bs=1, groups, rcout, cin, oyx4=(1,1))
 
       def compute_dfactors(d, dim=0):
-        if dim == 2:
-          # base
+        if dim == len(HW):
           return d
-        # winograd dot
         d0 = compute_dfactors(4 * d[0] - 5 * d[2] + d[4], dim=dim + 1)
         d1 = compute_dfactors(-4 * d[1] - 4 * d[2] + d[3] + d[4], dim=dim + 1)
         d2 = compute_dfactors(4 * d[1] - 4 * d[2] - d[3] + d[4], dim=dim + 1)
@@ -757,13 +755,10 @@ class Tensor:
       dfactors = dfactors.reshape(*HWI, bs, groups, 1, cin, *oyxi).expand(*HWI, bs, groups, rcout, cin, *oyxi)
 
       mfactors = gfactors * dfactors
-      mfactors = mfactors.sum(axis=-3)  # sum across cin: (HW4, bs, groups, rcout, *oyx4)
-
-      # mfactors = mfactors.realize()  # HW in back
-      # mfactors = mfactors.permute(*[len(mfactors.shape) - len(HW) + i for i in range(len(HW))], *[i for i in range(len(mfactors.shape) - 2)])  # move HW to the front
+      mfactors = mfactors.sum(axis=-1-len(HW))  # sum across cin: (HW4, bs, groups, rcout, *oyx4)
 
       def compute_result(m, dim=0):
-        if dim == 2:
+        if dim == len(HW):
           return m
         mm = [compute_result(m[i], dim=dim+1) for i in range(6)]
         r0 = mm[0] + mm[1] + mm[2] + mm[3] + mm[4]
@@ -773,15 +768,8 @@ class Tensor:
         return Tensor.stack([r0, r1, r2, r3])
 
       ret = compute_result(mfactors)  # outputs 2x2 result from 4x4 block: (H2, W2, bs, groups, rcout, *oyx4)
-      print(ret.shape)
-      ret = ret.permute(*[len(HW) + i for i in range(len(ret.shape) - 2)], *[i for i in range(len(HW))])  # move HW to the back: (bs, groups, rcout, *oyx4, cin, HW2)
-      # ret = ret.sum(axis=-3)  # sum across cin: (bs, groups, rcout, *oyx4, H2, W2)
 
-      ret = ret.permute(*[len(ret.shape) - len(HW) + i for i in range(len(HW))], *[i for i in range(len(ret.shape) - 2)])  # move HW to the front
-
-      ret = ret.permute([0, *[i for i in range(2, len(ret.shape))], 1])  # move W to end: (H2, bs, groups, rcout, *oyx4, W2)
-      ret = ret.flatten(-2)  # flatten x axis: (H2, bs, groups, rcout, *oyx)
-      ret = ret.permute([*[i for i in range(1, len(ret.shape) - 1)], 0, len(ret.shape) - 1])  # interleave H2: (bs, groups, rcout, y, h, x)
+      ret = ret.permute([*list(range(len(HW), len(ret.shape)-len(HW))), *[i+o for i in range(len(HW)) for o in [len(ret.shape)-len(HW),0]]])  # interleave oyx and HW: (bs, groups, rcout, *oy4, H2, ox4, W2)
       ret = ret.reshape(bs, cout, *[c * HWO[i] for i, c in enumerate(oyxi)])
       ret = ret.shrink(tuple([(0, s) for s in ret.shape[:-2]] + [(0, s - end_shrink[i]) for i, s in enumerate(ret.shape[-2:])]))
 

@@ -8,13 +8,13 @@ from tinygrad.lazy import LazyBuffer
 import time
 from typing import Callable
 def apply_opt(k, x):
-  if DEBUG >= 3: print(f"Shape: {k.full_shape}; Applying opt: {list(y for y in x if y[1] != 1)}")
+  if DEBUG >= 2: print(f"Shape: {k.full_shape}; Applying opt: {list(y for y in x if y[1] != 1)}")
   for axis, amt, typ in x:
     if axis is None or amt == 1: continue
     if typ == "R":
       typ = "U"
       axis += k.local_dims
-    assert k.full_shape[axis] % amt == 0, "no longer valid shift"
+    if k.full_shape[axis] % amt != 0: raise Exception("no longer valid shift")
     if typ == "U":
       k.shift_to(axis, amt)
       k.upcast()
@@ -27,6 +27,14 @@ UPCASTS = [1,2,3,4,5,6,7,8]
 LOCALS = [1,2,3,4,5,6,7,8,16,24,32,64,96,128]
 def kernel_optimize_search(k:Linearizer, create_k:Callable[[], Linearizer], to_prg, baseline, suggestion):
   import nevergrad as ng
+  def cheap(x):
+    try:
+      k = create_k()
+      k.process()
+      apply_opt(k, x)
+    except (Exception, AssertionError):
+      return False
+    return True
   def opt(x):
     try:
       k = create_k()
@@ -34,11 +42,11 @@ def kernel_optimize_search(k:Linearizer, create_k:Callable[[], Linearizer], to_p
       apply_opt(k, x)
       prg = to_prg(k)
       first_tm = prg.exec(k.bufs, force_wait=True, optimizing=True)
-      if baseline*5 < first_tm*1000: return first_tm*1000  # very slow
-      tm = min([first_tm]+[prg.exec(k.bufs, force_wait=True, optimizing=True) for _ in range(2)])*1000
+      #if baseline*5 < first_tm*1000: return first_tm*1000  # very slow
+      tm = min([first_tm]+[prg.exec(k.bufs, force_wait=True, optimizing=True) for _ in range(10)])*1000
       return tm
     except Exception:
-      if DEBUG >= 3:
+      if DEBUG >= 2:
         import traceback
         traceback.print_exc()
       return 10000_000   # 10000 seconds is infinity
@@ -58,6 +66,7 @@ def kernel_optimize_search(k:Linearizer, create_k:Callable[[], Linearizer], to_p
   search_space = prod([len(x.choices) for x in opts])
   st = time.perf_counter()
   optimizer = ng.optimizers.NGOpt(parametrization=ng.p.Tuple(*opts), budget=min(search_space, 200))
+  optimizer.parametrization.register_cheap_constraint(cheap)
   if suggestion is not None:
     optimizer.suggest(suggestion)
   recommendation = optimizer.minimize(opt)
@@ -78,7 +87,20 @@ def kernel_optimize(k:Linearizer, create_k:Callable[[], Linearizer], to_prg):
     global_db = shelve.open("/tmp/kopt_cache")
 
   if global_db is not None and skey in global_db:
+    print('loading kopt from cache')
     choice = global_db[skey]
+    if choice == 'BASELINE':
+      print('baseline choice')
+      keys = [(typ, axis) for axis in range(k.first_reduce) for typ in 'UL']
+      if k.reduceop is not None:
+        keys += [('R', axis) for axis in range(k.first_reduce, k.shape_len)]
+      suggestion = dict.fromkeys(keys, 1)
+      override_opt = [(0, 6, 'U'), (1, 6, 'U'), (2, 4, 'U'), (2, 8, 'L'), (3, 8, 'L'), (4, 4, 'L')]
+      override_opt = [(0, 6, 'U'), (1, 6, 'U'), (4, 16, 'L')]
+      for i, s, typ in override_opt:
+        suggestion[typ, i] = s
+      choice = tuple([(axis, suggestion[(typ, axis)], typ) for (typ, axis) in keys])
+
   else:
     # get baseline
     def get_baseline():
@@ -235,6 +257,18 @@ def hand_coded_optimizations(k:Linearizer):
 
   # potentially do more upcasts of non reduce axes based on a heuristic
   upcasted_axis = set()
+  upcasted_cardinality = 1  # number of unrolled upcasted ops at the bottom layer
+
+  # if there are small dims with lots of valid masks, upcast them (they might be from Tensor.stack)
+  # this can be made much smarter
+  for axis in range(k.first_reduce - 1, -1, -1):
+    # todo: we need to be able to split axes that are masked, or refuse to merge them in simplify_merge_adjacent
+    if k.full_shape[axis] <= 16 and any(k.sts[buf_index].axis_needs_valid(axis) for buf_index in range(len(k.sts))):
+      if DEBUG >= 2: print(f"upcasting masked axis : {axis}")
+      shift_upcast(k, axis, k.full_shape[axis], suggestion)
+      upcasted_axis.add(axis)
+      k.simplify_ones()
+
   while prod(k.sts[0].shape[:k.first_reduce]) >= 1024:
     xb_choices = []
     for axis, upcast_amount in itertools.product(range(k.first_reduce), [3,4]):   # consider all the non reduce axes, and a 3 or 4 reduce
@@ -276,7 +310,7 @@ def hand_coded_optimizations(k:Linearizer):
       local_size = prod(k.full_shape[k.first_reduce-k.local_dims:k.first_reduce])
       if k.full_shape[axis] == 1: continue
       last_try = k.local_dims == 0 and axis == 0
-      if any(k.sts[buf_index].views[-1].strides[axis] == 0 for buf_index in range(len(k.sts))) or last_try:
+      if any(k.sts[buf_index].views[-1].strides[axis] <= 2 for buf_index in range(len(k.sts))) or last_try or True:
         for sz in [x for x in (([32] if last_try else []) + [16,8,4,3]) if k.full_shape[axis] % x == 0 and local_size*x <= 128]:
           shift_local(k, axis, sz, suggestion)
           break
