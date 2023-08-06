@@ -775,7 +775,7 @@ class Tensor:
       ret = ret.shrink(tuple([(0, s) for s in ret.shape[:-2]] + [(0, s - end_shrink[i]) for i, s in enumerate(ret.shape[-2:])]))
 
 
-    return ret if bias is None else ret.add(bias.reshape(1, -1, *[1 for _ in range(len(HW))]))
+    return (ret if bias is None else ret.add(bias.reshape(1, -1, *[1 for _ in range(len(HW))]))).realize()
 
   def dot(self, w:Tensor) -> Tensor:
     n1, n2 = len(self.shape), len(w.shape)
