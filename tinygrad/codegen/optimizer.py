@@ -65,7 +65,7 @@ def kernel_optimize_search(k:Linearizer, create_k:Callable[[], Linearizer], to_p
   if len(opts) == 0: return "BASELINE"
   search_space = prod([len(x.choices) for x in opts])
   st = time.perf_counter()
-  optimizer = ng.optimizers.NGOpt(parametrization=ng.p.Tuple(*opts), budget=min(search_space, 200))
+  optimizer = ng.optimizers.NGOpt(parametrization=ng.p.Tuple(*opts), budget=min(search_space, 100))
   optimizer.parametrization.register_cheap_constraint(cheap)
   if suggestion is not None:
     optimizer.suggest(suggestion)
@@ -252,7 +252,7 @@ def hand_coded_optimizations(k:Linearizer):
   # this can be made much smarter
   for axis in range(k.first_reduce - 1, -1, -1):
     # todo: we need to be able to split axes that are masked, or refuse to merge them in simplify_merge_adjacent
-    if k.full_shape[axis] <= 16 and any(k.sts[buf_index].axis_needs_valid(axis) for buf_index in range(len(k.sts))):
+    if k.full_shape[axis] == 6 and any(k.sts[buf_index].axis_needs_valid(axis) for buf_index in range(len(k.sts))):
       if DEBUG >= 2: print(f"upcasting masked axis : {axis}")
       shift_upcast(k, axis, k.full_shape[axis], suggestion)
       upcasted_axis.add(axis)

@@ -128,6 +128,10 @@ class TestBigSpeed(unittest.TestCase):
     helper_test_generic_square('gemm', 4096, f, f)
   def test_large_conv_1x1(self): helper_test_conv(bs=32, in_chans=128, out_chans=128, kernel_size=1, img_size_y=128, img_size_x=128)
   def test_large_conv_3x3(self): helper_test_conv(bs=4, in_chans=128, out_chans=128, kernel_size=3, img_size_y=130, img_size_x=130)
+  def test_large_conv_3x3_2(self): helper_test_conv(bs=4, in_chans=128, out_chans=256, kernel_size=3, img_size_y=130, img_size_x=130)
+  def test_large_conv_3x3_3(self): helper_test_conv(bs=4, in_chans=256, out_chans=128, kernel_size=3, img_size_y=130, img_size_x=130)
+  def test_large_conv_3x3_4(self): helper_test_conv(bs=4, in_chans=256, out_chans=256, kernel_size=3, img_size_y=130, img_size_x=130)
+  def test_large_conv_3x3_5(self): helper_test_conv(bs=4, in_chans=512, out_chans=512, kernel_size=3, img_size_y=130, img_size_x=130)
   def test_large_conv_5x5(self): helper_test_conv(bs=4, in_chans=128, out_chans=128, kernel_size=5, img_size_y=130, img_size_x=130)
 
 @unittest.skipIf((getenv("BIG") == 1), "only big tests")
