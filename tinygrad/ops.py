@@ -183,7 +183,7 @@ class Compiled:
       from tinygrad.codegen.optimizer import kernel_optimize, hand_coded_optimizations
       if k.key not in self.method_cache:
         if getenv("KOPT"):
-          kernel_optimize(k, lambda: self.codegen(ast, output), self.runtime)
+          k = kernel_optimize(k, lambda: self.codegen(ast, output), self.runtime)
         elif not getenv("NOOPT"):
           hand_coded_optimizations(k)
         self.method_cache[k.key] = k.codegen().build(self.runtime)
