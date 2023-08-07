@@ -295,7 +295,7 @@ class Linearizer:
 
     # uops
     self.uops: List[UOp] = []
-    self.saved_exprs: Dict[Any, List[Token]] = dict()
+    self.saved_exprs: Dict[Any, Token] = dict()
 
     # add global buffers
     for buf,name in self.arg_bufs.items():
@@ -502,7 +502,7 @@ class Linearizer:
     values = [self.ast_parse(v, acc, loaded_buffers, ssa) for v in x.src]
     ops = {ReduceOps.SUM:BinaryOps.ADD, ReduceOps.MAX:BinaryOps.MAX, TernaryOps.MULACC:TernaryOps.MULACC}
     if x.op in ops:
-      ret = [(idx, self.uop_alu(val[-1], list(val), ops[x.op])) for idx, val in get_grouped_maybe_float4(*values, acc, grouping_allowed=self.opts.supports_float4_alu)]
+      ret = [(idx, self.uop(UOps.ALU, val[-1], list(val), ops[x.op])) for idx, val in get_grouped_maybe_float4(*values, acc, grouping_allowed=self.opts.supports_float4_alu)]
     else:
       ret = [(idx, self.uop_alu(ssa('alu', dtypes._float4) if any(x.dtype == dtypes._float4 and x.offset is None for x in val) else ssa('alu'), list(val), x.op)) for idx, val in get_grouped_maybe_float4(*values, grouping_allowed=self.opts.supports_float4_alu and x.op not in {BinaryOps.CMPEQ, TernaryOps.WHERE})]
     ordered_ret: List[Optional[Token]] = [None]*len(values[0])
