@@ -270,7 +270,7 @@ def hand_coded_optimizations(k:Linearizer):
   to_upcast = []
   for axis in range(k.first_reduce):
     # todo: we need to be able to split axes that are masked, or refuse to merge them in simplify_merge_adjacent
-    if k.full_shape[axis] <= 16 and any(k.sts[buf_index].axis_needs_valid(axis) for buf_index in range(len(k.sts))) and upcasted_cardinality < 36:
+    if k.full_shape[axis] <= 16 and any(k.sts[buf_index].axis_needs_valid(axis) for buf_index in range(len(k.sts))) and upcasted_cardinality * k.full_shape[axis] <= 7*7:
       if DEBUG >= 2: print(f"upcasting masked axis : {axis}")
       to_upcast.append(axis)
       upcasted_cardinality *= k.full_shape[axis]
