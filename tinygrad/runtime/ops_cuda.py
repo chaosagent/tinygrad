@@ -60,7 +60,8 @@ class CUDAProgram:
         f.write(prg.encode('utf-8'))
         print(fn)
     if not binary:
-      try: prg = cuda_compile(prg, target="ptx", no_extern_c=True, options=['-Wno-deprecated-gpu-targets', '-lineinfo']).decode('utf-8')
+      # suppress unused variable diag
+      try: prg = cuda_compile(prg, target="ptx", no_extern_c=True, options=['-Wno-deprecated-gpu-targets', '-lineinfo', '-diag-suppress', '550', '-diag-suppress', '177']).decode('utf-8')
       except cuda.CompileError as e:
         if DEBUG >= 3: print("FAILED TO BUILD", prg)
         raise e
@@ -97,4 +98,4 @@ renderer = functools.partial(uops_to_cstyle, CStyleLanguage(
       __device__ __forceinline__ explicit operator float4() const {return make_float4(__half2float(x.x), __half2float(x.y), __half2float(y.x), __half2float(y.y)); }
     };
   """))
-CUDABuffer = Compiled(RawCUDABuffer, LinearizerOptions(supports_float4_alu=False, global_max = [65535, 65535, 2147483647]), renderer, CUDAProgram, cuda.Context.synchronize)
+CUDABuffer = Compiled(RawCUDABuffer, LinearizerOptions(supports_float4_alu=False, global_max = [65535, 65535, 65535]), renderer, CUDAProgram, cuda.Context.synchronize)

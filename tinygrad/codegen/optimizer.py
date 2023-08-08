@@ -9,6 +9,7 @@ import time
 from typing import Callable
 def apply_opt(k, x):
   if DEBUG >= 2: print(f"Shape: {k.full_shape}; Applying opt: {list(y for y in x if y[1] != 1)}")
+  upcasted = 1
   for axis, amt, typ in x:
     if axis is None or amt == 1: continue
     if typ == "R":
@@ -18,9 +19,12 @@ def apply_opt(k, x):
     if typ == "U":
       k.shift_to(axis, amt)
       k.upcast()
+      upcasted *= amt
     elif typ == "L":
       k.shift_to(axis, amt, insert_before=k.first_reduce)
       k.local_dims += 1
+  if upcasted > 128:
+    raise Exception("too many upcasts")
   k.simplify_ones()
 
 UPCASTS = [1,2,3,4,5,6,7,8]
@@ -43,7 +47,7 @@ def kernel_optimize_search(k:Linearizer, create_k:Callable[[], Linearizer], to_p
       prg = to_prg(k)
       first_tm = prg.exec(k.bufs, force_wait=True, optimizing=True)
       #if baseline*5 < first_tm*1000: return first_tm*1000  # very slow
-      tm = min([first_tm]+[prg.exec(k.bufs, force_wait=True, optimizing=True) for _ in range(10)])*1000
+      tm = min([first_tm]+[prg.exec(k.bufs, force_wait=True, optimizing=True) for _ in range(20)])*1000
       return tm
     except Exception:
       if DEBUG >= 2:
@@ -97,9 +101,14 @@ def kernel_optimize(k:Linearizer, create_k:Callable[[], Linearizer], to_prg):
       k = create_k()
       suggestion = hand_coded_optimizations(k)
       prg = to_prg(k)
-      return min([prg.exec(k.bufs, force_wait=True, optimizing=True) for _ in range(5)])*1000, suggestion, k
+      try:
+        baseline = min([prg.exec(k.bufs, force_wait=True, optimizing=True) for _ in range(20)])*1000
+      except Exception:
+        baseline = 1000_000
+
+      return baseline, suggestion, k
     baseline, suggestion, baseline_k = get_baseline()
-    if baseline > 1:
+    if baseline > 4:
       choice = kernel_optimize_search(k, create_k, to_prg, baseline, suggestion)
       if global_db is not None:
         global_db[skey] = choice
@@ -258,13 +267,17 @@ def hand_coded_optimizations(k:Linearizer):
 
   # if there are small dims with lots of valid masks, upcast them (they might be from Tensor.stack)
   # this can be made much smarter
-  for axis in range(k.first_reduce - 1, -1, -1):
+  to_upcast = []
+  for axis in range(k.first_reduce):
     # todo: we need to be able to split axes that are masked, or refuse to merge them in simplify_merge_adjacent
-    if k.full_shape[axis] <= 16 and any(k.sts[buf_index].axis_needs_valid(axis) for buf_index in range(len(k.sts))):
+    if k.full_shape[axis] <= 16 and any(k.sts[buf_index].axis_needs_valid(axis) for buf_index in range(len(k.sts))) and upcasted_cardinality < 36:
       if DEBUG >= 2: print(f"upcasting masked axis : {axis}")
-      shift_upcast(k, axis, k.full_shape[axis], suggestion)
-      upcasted_axis.add(axis)
-      k.simplify_ones()
+      to_upcast.append(axis)
+      upcasted_cardinality *= k.full_shape[axis]
+  for axis in to_upcast[::-1]:
+    shift_upcast(k, axis, k.full_shape[axis], suggestion)
+    upcasted_axis.add(axis)
+    k.simplify_ones()
 
   while prod(k.sts[0].shape[:k.first_reduce]) >= 1024:
     xb_choices = []

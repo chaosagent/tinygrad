@@ -640,12 +640,12 @@ class Tensor:
           end_shrink.append(0)
       HW4 = (4, 4)  # F(2x2,3x3) winograd kernel granularity
       assert len(HW) == len(HW4)  # only support 2d winograd for now
-      x = self.pad2d(padding_)._pool(HW4, stride * 2 if isinstance(stride, int) else [s * 2 for s in stride], dilation)  # double stride for winograd kernel granularity
+      x = self.realize().pad2d(padding_)._pool(HW4, stride * 2 if isinstance(stride, int) else [s * 2 for s in stride], dilation)  # double stride for winograd kernel granularity
       rcout, oyx4 = cout // groups, x.shape[2:-len(HW4)]
 
       # (bs, groups, cin, oyx4, HW4)
       x = x.permute(*[len(x.shape) - len(HW4) + i for i in range(len(HW4))], *[i for i in range(len(x.shape) - 2)])  # move HW to the front
-      g = weight.reshape(1, groups, rcout, cin, *[1 for _ in range(len(oyx4))], *HW)
+      g = weight.realize().reshape(1, groups, rcout, cin, *[1 for _ in range(len(oyx4))], *HW)
       g = g.permute(*[len(g.shape) - len(HW) + i for i in range(len(HW))], *[i for i in range(len(g.shape) - 2)])  # move HW to the front
 
       # x: (HW4, bs, groups, cin, oyx4)
@@ -775,7 +775,7 @@ class Tensor:
       ret = ret.shrink(tuple([(0, s) for s in ret.shape[:-2]] + [(0, s - end_shrink[i]) for i, s in enumerate(ret.shape[-2:])]))
 
 
-    return ret if bias is None else ret.add(bias.reshape(1, -1, *[1 for _ in range(len(HW))]))
+    return (ret if bias is None else ret.add(bias.reshape(1, -1, *[1 for _ in range(len(HW))]))).realize()
 
   def dot(self, w:Tensor) -> Tensor:
     n1, n2 = len(self.shape), len(w.shape)
