@@ -23,7 +23,7 @@ def apply_opt(k, x):
     elif typ == "L":
       k.shift_to(axis, amt, insert_before=k.first_reduce)
       k.local_dims += 1
-  if upcasted > 128:
+  if upcasted * len(k.bufs) > 128 * 16 * 36:
     raise Exception("too many upcasts")
   k.simplify_ones()
 
