@@ -95,7 +95,6 @@ def kernel_optimize(k:Linearizer, create_k:Callable[[], Linearizer], to_prg):
     # get baseline
     def get_baseline():
       k = create_k()
-      hand_coded_optimizations(k)
       suggestion = hand_coded_optimizations(k)
       prg = to_prg(k)
       return min([prg.exec(k.bufs, force_wait=True, optimizing=True) for _ in range(5)])*1000, suggestion, k
