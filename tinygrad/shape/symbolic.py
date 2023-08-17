@@ -202,21 +202,33 @@ class SumNode(RedNode):
     if not factoring_allowed: return Node.__floordiv__(self, b, factoring_allowed)
     fully_divided: List[Node] = []
     rest: List[Node] = []
-    _gcd = b
-    divisor = 1
-    for x in self.flat_components:
-      if x.__class__ in (NumNode, MulNode):
-        if x.b%b == 0: fully_divided.append(x//b)
+    nodes: List[Node] = self.flat_components
+    b_defer = 1
+    i = 0
+    while nodes:
+      i += 1
+      _gcd = b
+      divisor = 1
+      for x in nodes:
+        if x.__class__ in (NumNode, MulNode):
+          if x.b%b == 0: fully_divided.append((x//b) // b_defer)
+          else:
+            rest.append(x)
+            _gcd = gcd(_gcd, x.b)
+            if x.__class__ == MulNode and divisor == 1 and b%x.b == 0:
+              fully_divided.append(x.a // (b // x.b))
         else:
           rest.append(x)
-          _gcd = gcd(_gcd, x.b)
-          if x.__class__ == MulNode and divisor == 1 and b%x.b == 0: divisor = x.b
+          _gcd = 1
+      if _gcd > 1: next_b = _gcd
       else:
-        rest.append(x)
-        _gcd = 1
-    if _gcd > 1: return Node.sum(fully_divided) + Node.sum(rest).__floordiv__(_gcd) // (b//_gcd)
-    if divisor > 1: return Node.sum(fully_divided) + Node.sum(rest).__floordiv__(divisor) // (b//divisor)
-    return Node.sum(fully_divided) + Node.__floordiv__(Node.sum(rest), b)
+        return Node.sum(fully_divided) + Node.__floordiv__(Node.sum(rest), b)
+      nodes = rest
+      rest = []
+      b_defer = b // next_b
+      b = next_b
+    if i >= 3: print(i)
+    return Node.sum(fully_divided)
 
   def __mod__(self, b: int):
     new_nodes: List[Node] = []
