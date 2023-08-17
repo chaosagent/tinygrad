@@ -473,7 +473,7 @@ class Tensor:
     return x.conv2d(w.reshape(w.shape[0]*w.shape[1],*w.shape[2:]), groups=groups, bias=bias, dilation=dilation, padding=padding)
 
   def conv2d(self, weight:Tensor, bias:Optional[Tensor]=None, groups=1, stride=1, dilation=1, padding=0) -> Tensor:
-    print('conv2d', self.shape)
+    print('conv2d', self.shape, groups, stride, dilation, padding)
     (bs,cin_), (cout,cin), HW = self.shape[:2], weight.shape[:2], weight.shape[2:]
     assert groups*cin == cin_ and len(self.shape) == len(weight.shape), f"Input Tensor shape {self.shape} does not match the shape of the weights {weight.shape}. ({groups*cin} vs. {cin_})"
     if isinstance(padding, (tuple, list)): assert len(padding) == 2 * len(HW) or len(padding) == len(HW), f"Expected padding of length {2 * len(HW)} or {len(HW)}, but got {len(padding)} for tensor of shape {self.shape}"
@@ -495,213 +495,6 @@ class Tensor:
 
       # conv! broadcasted to (bs, groups, rcout, *oyx, cin, *HW)
       ret = (x * weight.reshape(1, groups, rcout, *[1 for _ in range(len(oyx))], cin, *HW)).sum([-1-i for i in range(1+len(oyx))], keepdim=True).reshape(bs, cout, *oyx)
-    elif getenv('WINOGRAD_FUSED', 0):
-      # winograd conv
-      # todo: padding edge cases
-      end_shrink = []
-      for i, dim in enumerate(self.shape[-2:]):
-        if (dim + sum(padding_[i * 2:(i + 1) * 2])) % 2 != 0:
-          padding_[i * 2 + 1] = padding_[i * 2 + 1] + 1
-          end_shrink.append(1)
-        else:
-          end_shrink.append(0)
-      HW4 = (4, 4)  # F(2x2,3x3) winograd kernel granularity
-      assert len(HW) == len(HW4)  # only support 2d winograd for now
-      x = self.pad2d(padding_)._pool(HW4, stride * 2 if isinstance(stride, int) else [s * 2 for s in stride], dilation)  # double stride for winograd kernel granularity
-      rcout, oyx4 = cout // groups, x.shape[2:-len(HW4)]
-      x = x.reshape(bs, groups, cin, 1, *oyx4, *HW4).expand(bs, groups, cin, rcout, *oyx4, *HW4).permute(0, 1, 3, *[4 + i for i in range(len(oyx4))], 2, *[4 + len(oyx4) + i for i in range(len(HW4))])
-      # x = x.realize()  # (bs, groups, rcout, *oyx, cin, *HW)
-      x = x.permute(*[len(x.shape) - len(HW4) + i for i in range(len(HW4))], *[i for i in range(len(x.shape) - 2)])  # move HW to the front
-      g = weight.reshape(1, groups, rcout, *[1 for _ in range(len(oyx4))], cin, *HW)
-      g = g.permute(*[len(x.shape) - len(HW) + i for i in range(len(HW))], *[i for i in range(len(x.shape) - 2)])  # move HW to the front
-      # make into arrays
-      #x = [[x.shrink([(i, i + 1), (j, j + 1), *[(0, s) for s in x.shape[2:]]]) for j in range(x.shape[1])] for i in range(x.shape[0])]
-      #g = [[g.shrink([(i, i + 1), (j, j + 1), *[(0, s) for s in g.shape[2:]]]) for j in range(g.shape[1])] for i in range(g.shape[0])]
-      # compute 2x2 of g0, g0+g1+g2, g0-g1+g2, g2
-      def compute_g(g_, dim=0):
-        if dim == 2:
-          return g_
-        g0 = compute_g(g_[0], dim=dim+1)
-        ga = compute_g((g_[0] + g_[1] + g_[2]) / 2, dim=dim+1)
-        gb = compute_g((g_[0] - g_[1] + g_[2]) / 2, dim=dim+1)
-        g2 = compute_g(g_[2], dim=dim+1)
-        return Tensor.stack([g0, ga, gb, g2])
-      gfactors = compute_g(g).permute(*[len(HW) + i for i in range(len(x.shape) - 2)], *[i for i in range(len(HW))])  # move HW to the back
-      gfactors = gfactors.realize()  # realize gfactors
-      gfactors = gfactors.permute(*[len(x.shape) - len(HW) + i for i in range(len(HW))], *[i for i in range(len(x.shape) - 2)])  # move HW to the front
-      def _winograd(d, gfactors, dim=0):
-        if dim == 2:
-          # base dot
-          return d * gfactors
-        # winograd dot
-        m1 = _winograd((d[0] - d[2]), gfactors[0], dim=dim+1)
-        m2 = _winograd((d[1] + d[2]), gfactors[1], dim=dim+1)
-        m3 = _winograd((d[2] - d[1]), gfactors[2], dim=dim+1)
-        m4 = _winograd((d[1] - d[3]), gfactors[3], dim=dim+1)
-        r1 = m1 + m2 + m3
-        r2 = m2 - m3 - m4
-        return Tensor.stack([r1, r2])
-      ret = _winograd(x, gfactors)  # outputs 2x2 result from 4x4 block: (H2, W2, bs, groups, rcout, *oyx4, cin)
-      ret = ret.permute(*[len(HW) + i for i in range(len(x.shape) - 2)], *[i for i in range(len(HW))])  # move HW to the back: (bs, groups, rcout, *oyx4, cin, HW2)
-      ret = ret.sum(axis=-3)  # sum across cin: (bs, groups, rcout, *oyx4, H2, W2)
-
-      ret = ret.permute(*[len(ret.shape) - len(HW) + i for i in range(len(HW))], *[i for i in range(len(ret.shape) - 2)])  # move HW to the front
-
-      ret = ret.permute([0, *[i for i in range(2, len(ret.shape))], 1])  # move W to end: (H2, bs, groups, rcout, *oyx4, W2)
-      ret = ret.flatten(-2)  # flatten x axis: (H2, bs, groups, rcout, *oyx)
-      ret = ret.permute([*[i for i in range(1, len(ret.shape) - 1)], 0, len(ret.shape)-1])  # interleave H2: (bs, groups, rcout, y, h, x)
-      ret = ret.reshape(bs, cout, *[c * 2 for c in oyx4])
-      ret = ret.shrink(tuple([(0,s) for s in ret.shape[:-2]] + [(0, s - end_shrink[i]) for i, s in enumerate(ret.shape[-2:])]))
-    elif getenv('WINOGRAD_TWOPART', 0):
-      # winograd conv
-      # todo: padding edge cases
-      end_shrink = []
-      for i, dim in enumerate(self.shape[-2:]):
-        if (dim + sum(padding_[i * 2:(i + 1) * 2])) % 2 != 0:
-          padding_[i * 2 + 1] = padding_[i * 2 + 1] + 1
-          end_shrink.append(1)
-        else:
-          end_shrink.append(0)
-      HW4 = (4, 4)  # F(2x2,3x3) winograd kernel granularity
-      assert len(HW) == len(HW4)  # only support 2d winograd for now
-      x = self.pad2d(padding_)._pool(HW4, stride * 2 if isinstance(stride, int) else [s * 2 for s in stride], dilation)  # double stride for winograd kernel granularity
-      rcout, oyx4 = cout // groups, x.shape[2:-len(HW4)]
-      x = x.reshape(bs, groups, cin, 1, *oyx4, *HW4).expand(bs, groups, cin, rcout, *oyx4, *HW4).permute(0, 1, 3, *[4 + i for i in range(len(oyx4))], 2, *[4 + len(oyx4) + i for i in range(len(HW4))])
-      # x = x.realize()  # (bs, groups, rcout, *oyx, cin, *HW)
-      x = x.permute(*[len(x.shape) - len(HW4) + i for i in range(len(HW4))], *[i for i in range(len(x.shape) - 2)])  # move HW to the front
-      g = weight.reshape(1, groups, rcout, *[1 for _ in range(len(oyx4))], cin, *HW)
-      g = g.permute(*[len(x.shape) - len(HW) + i for i in range(len(HW))], *[i for i in range(len(x.shape) - 2)])  # move HW to the front
-      # make into arrays
-      #x = [[x.shrink([(i, i + 1), (j, j + 1), *[(0, s) for s in x.shape[2:]]]) for j in range(x.shape[1])] for i in range(x.shape[0])]
-      #g = [[g.shrink([(i, i + 1), (j, j + 1), *[(0, s) for s in g.shape[2:]]]) for j in range(g.shape[1])] for i in range(g.shape[0])]
-      # compute 2x2 of g0, g0+g1+g2, g0-g1+g2, g2
-      def compute_g(g_, dim=0):
-        if dim == 2:
-          return g_
-        g0 = compute_g(g_[0], dim=dim+1)
-        ga = compute_g((g_[0] + g_[1] + g_[2]) / 2, dim=dim+1)
-        gb = compute_g((g_[0] - g_[1] + g_[2]) / 2, dim=dim+1)
-        g2 = compute_g(g_[2], dim=dim+1)
-        return Tensor.stack([g0, ga, gb, g2])
-      gfactors = compute_g(g).permute(*[len(HW) + i for i in range(len(x.shape) - 2)], *[i for i in range(len(HW))])  # move HW to the back
-      gfactors = gfactors.realize()  # realize gfactors
-      #gfactors = gfactors.permute(*[len(x.shape) - len(HW) + i for i in range(len(HW))], *[i for i in range(len(x.shape) - 2)])  # move HW to the front
-      def compute_dfactors(d, dim=0):
-        if dim == 2:
-          # base
-          return d
-        # winograd dot
-        d1 = compute_dfactors((d[0] - d[2]), dim=dim+1)
-        d2 = compute_dfactors((d[1] + d[2]), dim=dim+1)
-        d3 = compute_dfactors((d[2] - d[1]), dim=dim+1)
-        d4 = compute_dfactors((d[1] - d[3]), dim=dim+1)
-        return Tensor.stack([d1, d2, d3, d4])
-      dfactors = compute_dfactors(x).permute(*[len(HW) + i for i in range(len(x.shape) - 2)], *[i for i in range(len(HW))])  # same realized layout as gfactors
-      #dfactors = dfactors.realize()
-      #dfactors = dfactors.permute(*[len(x.shape) - len(HW) + i for i in range(len(HW))], *[i for i in range(len(x.shape) - 2)])  # move HW to the front
-
-      mfactors = gfactors * dfactors
-      mfactors = mfactors.sum(axis=-3)  # sum across cin: (bs, groups, rcout, *oyx4, H2, W2)
-      mfactors = mfactors.realize()  # HW in back
-      mfactors = mfactors.permute(*[len(mfactors.shape) - len(HW) + i for i in range(len(HW))], *[i for i in range(len(mfactors.shape) - 2)])  # move HW to the front
-
-
-      def compute_result(m, dim=0):
-        if dim == 2:
-          return m
-        m1 = compute_result(m[0], dim=dim+1)
-        m2 = compute_result(m[1], dim=dim+1)
-        m3 = compute_result(m[2], dim=dim+1)
-        m4 = compute_result(m[3], dim=dim+1)
-        r1 = m1 + m2 + m3
-        r2 = m2 - m3 - m4
-        return Tensor.stack([r1, r2])
-
-      ret = compute_result(mfactors)  # outputs 2x2 result from 4x4 block: (H2, W2, bs, groups, rcout, *oyx4)
-      ret = ret.permute(*[len(HW) + i for i in range(len(ret.shape) - 2)], *[i for i in range(len(HW))])  # move HW to the back: (bs, groups, rcout, *oyx4, cin, HW2)
-      # ret = ret.sum(axis=-3)  # sum across cin: (bs, groups, rcout, *oyx4, H2, W2)
-
-      ret = ret.permute(*[len(ret.shape) - len(HW) + i for i in range(len(HW))], *[i for i in range(len(ret.shape) - 2)])  # move HW to the front
-
-      ret = ret.permute([0, *[i for i in range(2, len(ret.shape))], 1])  # move W to end: (H2, bs, groups, rcout, *oyx4, W2)
-      ret = ret.flatten(-2)  # flatten x axis: (H2, bs, groups, rcout, *oyx)
-      ret = ret.permute([*[i for i in range(1, len(ret.shape) - 1)], 0, len(ret.shape)-1])  # interleave H2: (bs, groups, rcout, y, h, x)
-      ret = ret.reshape(bs, cout, *[c * 2 for c in oyx4])
-      ret = ret.shrink(tuple([(0,s) for s in ret.shape[:-2]] + [(0, s - end_shrink[i]) for i, s in enumerate(ret.shape[-2:])]))
-    elif getenv('WINOGRAD_THREEPART', 0):
-      # winograd conv 16 matmul
-      # todo: padding edge cases
-      end_shrink = []
-      for i, dim in enumerate(self.shape[-2:]):
-        if (dim + sum(padding_[i * 2:(i + 1) * 2])) % 2 != 0:
-          padding_[i * 2 + 1] = padding_[i * 2 + 1] + 1
-          end_shrink.append(1)
-        else:
-          end_shrink.append(0)
-      HW4 = (4, 4)  # F(2x2,3x3) winograd kernel granularity
-      assert len(HW) == len(HW4)  # only support 2d winograd for now
-      x = self.realize().pad2d(padding_)._pool(HW4, stride * 2 if isinstance(stride, int) else [s * 2 for s in stride], dilation)  # double stride for winograd kernel granularity
-      rcout, oyx4 = cout // groups, x.shape[2:-len(HW4)]
-
-      # (bs, groups, cin, oyx4, HW4)
-      x = x.permute(*[len(x.shape) - len(HW4) + i for i in range(len(HW4))], *[i for i in range(len(x.shape) - 2)])  # move HW to the front
-      g = weight.realize().reshape(1, groups, rcout, cin, *[1 for _ in range(len(oyx4))], *HW)
-      g = g.permute(*[len(g.shape) - len(HW) + i for i in range(len(HW))], *[i for i in range(len(g.shape) - 2)])  # move HW to the front
-
-      # x: (HW4, bs, groups, cin, oyx4)
-
-      # compute 2x2 of g0, g0+g1+g2, g0-g1+g2, g2
-      def compute_g(g_, dim=0):
-        if dim == 2:
-          return g_
-        g0 = compute_g(g_[0], dim=dim+1)
-        ga = compute_g((g_[0] + g_[1] + g_[2]) / 2, dim=dim+1)
-        gb = compute_g((g_[0] - g_[1] + g_[2]) / 2, dim=dim+1)
-        g2 = compute_g(g_[2], dim=dim+1)
-        return Tensor.stack([g0, ga, gb, g2])
-      gfactors = compute_g(g).realize()  # (HW4, bs=1, groups, rcout, cin, oyx4=(1,1))
-      def compute_dfactors(d, dim=0):
-        if dim == 2:
-          # base
-          return d
-        # winograd dot
-        d1 = compute_dfactors((d[0] - d[2]), dim=dim+1)
-        d2 = compute_dfactors((d[1] + d[2]), dim=dim+1)
-        d3 = compute_dfactors((d[2] - d[1]), dim=dim+1)
-        d4 = compute_dfactors((d[1] - d[3]), dim=dim+1)
-        return Tensor.stack([d1, d2, d3, d4])
-      dfactors = compute_dfactors(x).realize()  # (HW4, bs, groups, cin, oyx4)
-
-      dfactors = dfactors.reshape(*HW4, bs, groups, 1, cin, *oyx4).expand(*HW4, bs, groups, rcout, cin, *oyx4)
-
-      mfactors = gfactors * dfactors
-      mfactors = mfactors.sum(axis=-3)  # sum across cin: (HW4, bs, groups, rcout, *oyx4)
-      #mfactors = mfactors.realize()  # HW in back
-      #mfactors = mfactors.permute(*[len(mfactors.shape) - len(HW) + i for i in range(len(HW))], *[i for i in range(len(mfactors.shape) - 2)])  # move HW to the front
-
-
-      def compute_result(m, dim=0):
-        if dim == 2:
-          return m
-        m1 = compute_result(m[0], dim=dim+1)
-        m2 = compute_result(m[1], dim=dim+1)
-        m3 = compute_result(m[2], dim=dim+1)
-        m4 = compute_result(m[3], dim=dim+1)
-        r1 = m1 + m2 + m3
-        r2 = m2 - m3 - m4
-        return Tensor.stack([r1, r2])
-
-      ret = compute_result(mfactors)  # outputs 2x2 result from 4x4 block: (H2, W2, bs, groups, rcout, *oyx4)
-      ret = ret.permute(*[len(HW) + i for i in range(len(ret.shape) - 2)], *[i for i in range(len(HW))])  # move HW to the back: (bs, groups, rcout, *oyx4, cin, HW2)
-      # ret = ret.sum(axis=-3)  # sum across cin: (bs, groups, rcout, *oyx4, H2, W2)
-
-      ret = ret.permute(*[len(ret.shape) - len(HW) + i for i in range(len(HW))], *[i for i in range(len(ret.shape) - 2)])  # move HW to the front
-
-      ret = ret.permute([0, *[i for i in range(2, len(ret.shape))], 1])  # move W to end: (H2, bs, groups, rcout, *oyx4, W2)
-      ret = ret.flatten(-2)  # flatten x axis: (H2, bs, groups, rcout, *oyx)
-      ret = ret.permute([*[i for i in range(1, len(ret.shape) - 1)], 0, len(ret.shape)-1])  # interleave H2: (bs, groups, rcout, y, h, x)
-      ret = ret.reshape(bs, cout, *[c * 2 for c in oyx4])
-      ret = ret.shrink(tuple([(0,s) for s in ret.shape[:-2]] + [(0, s - end_shrink[i]) for i, s in enumerate(ret.shape[-2:])]))
     else:
       # winograd conv 3 kernel f(4x4,3x3)
       # todo: padding edge cases
@@ -721,6 +514,7 @@ class Tensor:
 
       # x: (bs, groups, cin, oyx4, HW4)
       x = x.permute(*list(range(len(x.shape)-len(HW),len(x.shape))), *list(range(len(x.shape)-len(HW))))  # move HW to the front
+      x = x.contiguous_backward()
       g = weight.reshape(1, groups, rcout, cin, *([1]*len(oyxi)), *HW)
       g = g.permute(*list(range(len(g.shape)-len(HW),len(g.shape))), *list(range(len(g.shape)-len(HW))))  # move HW to the front
 
@@ -738,7 +532,7 @@ class Tensor:
         g5 = compute_g(g_[2], dim=dim + 1)
         return Tensor.stack([g0, g1, g2, g3, g4, g5])
 
-      gfactors = compute_g(g).realize()  # (HW4, bs=1, groups, rcout, cin, oyx4=(1,1))
+      gfactors = compute_g(g).contiguous()  # (HW4, bs=1, groups, rcout, cin, oyx4=(1,1))
 
       def compute_dfactors(d, dim=0):
         if dim == len(HW):
@@ -751,7 +545,7 @@ class Tensor:
         d5 = compute_dfactors(4 * d[1] - 5 * d[3] + d[5], dim=dim + 1)
         return Tensor.stack([d0, d1, d2, d3, d4, d5])
 
-      dfactors = compute_dfactors(x).realize()  # (HW4, bs, groups, cin, oyx4)
+      dfactors = compute_dfactors(x).contiguous()  # (HW4, bs, groups, cin, oyx4)
 
       dfactors = dfactors.reshape(*HWI, bs, groups, 1, cin, *oyxi).expand(*HWI, bs, groups, rcout, cin, *oyxi)
 
@@ -775,7 +569,7 @@ class Tensor:
       ret = ret.shrink(tuple([(0, s) for s in ret.shape[:-2]] + [(0, s - end_shrink[i]) for i, s in enumerate(ret.shape[-2:])]))
 
 
-    return (ret if bias is None else ret.add(bias.reshape(1, -1, *[1 for _ in range(len(HW))]))).realize()
+    return (ret if bias is None else ret.add(bias.reshape(1, -1, *[1 for _ in range(len(HW))]))).contiguous().contiguous_backward()
 
   def dot(self, w:Tensor) -> Tensor:
     n1, n2 = len(self.shape), len(w.shape)
@@ -793,6 +587,7 @@ class Tensor:
   # ***** mlops (unary) *****
 
   def contiguous(self): return mlops.Contiguous.apply(self)
+  def contiguous_backward(self): return mlops.ContiguousBackward.apply(self)
   def log(self): return mlops.Log.apply(self)
   def log2(self): return mlops.Log.apply(self)/log(2)
   def exp(self): return mlops.Exp.apply(self)

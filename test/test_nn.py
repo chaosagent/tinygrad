@@ -119,11 +119,13 @@ class TestNN(unittest.TestCase):
     np.testing.assert_allclose(z.numpy(), torch_z.detach().numpy(), atol=5e-4, rtol=1e-5)
 
   def test_conv2d_winograd(self):
-    BS, C1, H, W = 1, 32, 256, 128
-    C2, K, S, P = 64, 3, 1, 0
+    BS, C1, H, W = 4, 128, 256, 256
+    C2, K, S, P = 128, 3, 1, 1
 
     # create in tinygrad
     layer = Conv2d(C1, C2, kernel_size=K, stride=S, padding=P)
+    layer.weight.requires_grad = True
+    layer.bias.requires_grad = True
 
     # create in torch
     with torch.no_grad():
@@ -138,15 +140,12 @@ class TestNN(unittest.TestCase):
       torch_x = torch.tensor(x.cpu().numpy(), requires_grad=True)
       torch_z = torch_layer(torch_x)
       np.testing.assert_allclose(z.numpy(), torch_z.detach().numpy(), atol=5e-4, rtol=1e-5)
-    return
 
     m = z.mean()
     m.backward()
-    g = x.grad.realize()
-    torch_m = torch_z.mean()
-    torch_m.backward()
-    torch_g = torch_x.grad
-    np.testing.assert_allclose(g.numpy(), torch_g.detach().numpy(), atol=5e-4, rtol=1e-5)
+    gw = layer.weight.grad.realize()
+    gb = layer.bias.grad.realize()
+    gx = x.grad.realize()
 
   @unittest.skipIf(getenv("CI", "") != "" and (WINDOWS or Device.DEFAULT == "WEBGPU"), "runs out of memory in CI")
   def test_conv_transpose1d(self):

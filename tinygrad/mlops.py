@@ -9,6 +9,10 @@ class Contiguous(Function):
   def forward(self, x): return x.contiguous()
   def backward(self, grad_output): return grad_output
 
+class ContiguousBackward(Function):
+  def forward(self, x): return x
+  def backward(self, grad_output): return grad_output.contiguous()
+
 class Cast(Function):
   __slots__ = "input_dtype"
   def forward(self, x, dtype):
