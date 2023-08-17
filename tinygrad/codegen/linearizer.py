@@ -9,7 +9,7 @@ from tinygrad.lazy import LazyBuffer
 from tinygrad.ops import MovementOps, ReduceOps, BinaryOps, TernaryOps
 from tinygrad.runtime.lib import RawConst, buf_is_kernel_arg
 from tinygrad.shape.shapetracker import ShapeTracker, strides_for_shape, View
-from tinygrad.shape.symbolic import Variable, NumNode, Node, SumNode, MulNode
+from tinygrad.shape.symbolic import Variable, NumNode, Node, SumNode, MulNode, sym_rename
 VariableOrNum = Union[Variable, NumNode, Node]
 
 # bottom ones are asm only
@@ -53,7 +53,7 @@ class Token(NamedTuple):
       assert self.offset is None
       return f"{self.dtype.name} {self.name}"
     if self.offset is None: return self.name
-    assert self.dtype in [dtypes._float4, dtypes._float2]
+    assert self.dtype in [dtypes._float4, dtypes._float2], f"{self.dtype} isn't okay with offset {self.offset}"
     return self.name+"."+"xyzw"[int(self.offset)]
   def __repr__(self): return f"<{self.name}>" if self.offset is None and self.dtype == dtypes.float32 else f"<{self.name}:{self.dtype.name}:{self.offset}>"
 
@@ -122,7 +122,7 @@ class MemOp(NamedTuple):
   invalid_value: Union[float, int] = 0.0
 
 class ConstOp(NamedTuple):
-  value: float
+  value: Union[float, int]
 
   # shared
   valid: Variable
@@ -140,6 +140,7 @@ class LinearizerOptions(NamedTuple):
   supports_float4: bool = True
   supports_float4_alu: bool = True
   has_local: bool = True
+  # NOTE: these two should be in z,y,x(reversed) order for cstyle backends, they are flipped when kernel is rendered
   global_max: Optional[List[int]] = None
   local_max: Optional[List[int]] = None
 
@@ -242,6 +243,7 @@ class Linearizer:
 
     cache: Dict[str, Token] = load_cache[self.get_buffer_name(i)] if load_cache is not None and load_type == "val" else {}
     ret = []
+    invalid_value = 0 if dtypes.is_int(self.bufs[i].dtype) else 0.0
     for _idx in _idxs:
       if amt > 1:
         idx, valid = self.sts[i].expr_idxs((_idx[:dim] + (expanded_nodes[dim][0],) + _idx[dim+1:]))
@@ -252,10 +254,10 @@ class Linearizer:
       else:
         idx, valid = self.sts[i].expr_idxs(_idx)
         localtype = dtypes.float32
-      key = f"{localtype}{idx.render()}{valid.render()}" if valid.max != 0 else f"{localtype}{valid.render()}"
+      this_const, valid, key = (invalid_value, cast(Variable, Variable.num(1)), f"{localtype}INVALID") if valid.max == 0 else (const, valid, f"{localtype}{idx.render()}{valid.render()}")
       if key not in cache:
         if isinstance(self.bufs[i].dtype, ImageDType): idx = to_image_idx(self.bufs[i].dtype.shape, idx, valid)
-        cache[key] = self.uop(UOps.LOAD, Token(f"{load_type}{mnum(i)}_{len(cache)}", localtype, const_zero=valid.max == 0), [], MemOp(self.get_buffer_name(i), idx, self.bufs[i].__class__ is LocalBuffer, self.bufs[i].dtype, valid, 0.0 if not dtypes.is_int(self.bufs[i].dtype) else 0)) if const is None else \
+        cache[key] = self.uop(UOps.LOAD, Token(f"{load_type}{mnum(i)}_{len(cache)}", localtype, const_zero=valid.max == 0), [], MemOp(self.get_buffer_name(i), idx, self.bufs[i].__class__ is LocalBuffer, self.bufs[i].dtype, valid, invalid_value)) if const is None else \
                      self.uop(UOps.LOAD, Token(f"{load_type}{mnum(i)}_{len(cache)}", localtype, const_zero=valid.max == 0), [], ConstOp(const, valid))
       ret.append(Token(cache[key].name, cache[key].dtype, expanded_nodes[dim].index(_idx[dim])) if localtype != dtypes.float else cache[key])
     return ret
@@ -304,6 +306,9 @@ class Linearizer:
     # add global buffers
     for buf,name in self.arg_bufs.items():
       self.uop(UOps.DEFINE_GLOBAL, None, [], (name, buf.dtype))
+    # add variables from symbolic shapes
+    for var in sorted(set(v for buf in self.ast.buffers for v in buf.st.var_vals), key=lambda k: k.key):
+      self.uop(UOps.DEFINE_GLOBAL, None, [], (var.expr, dtypes._arg_int32))
 
     # add a local buffer for multistage reduce
     if len(self.group_for_reduce):
@@ -320,7 +325,7 @@ class Linearizer:
     if DEBUG >= 3: self.printbufs()
 
     # kernel name (before late upcast)
-    self.function_name = ("r_" if self.reduceop else "E_") + '_'.join([str(x) for x in self.full_shape])
+    self.function_name = ("r_" if self.reduceop else "E_") + '_'.join([str(x) if isinstance(x, int) else sym_rename(x) for x in self.full_shape])
     self.display_name = ("r_" if self.reduceop else "E_") + colored('_', 'BLACK').join([colored(str(x), c) for x,c in zip(self.full_shape, self.colors())])
 
     # parse AST
@@ -518,7 +523,7 @@ class Linearizer:
     if x.op in ops:
       ret = [(idx, self.uop(UOps.ALU, val[-1], list(val), ops[x.op])) for idx, val in get_grouped_maybe_float4(*values, acc, grouping_allowed=self.opts.supports_float4_alu)]
     else:
-      ret = [(idx, self.uop_alu(ssa('alu', dtypes._float4) if any(x.dtype == dtypes._float4 and x.offset is None for x in val) else ssa('alu'), list(val), x.op)) for idx, val in get_grouped_maybe_float4(*values, grouping_allowed=self.opts.supports_float4_alu and x.op not in {BinaryOps.CMPEQ, TernaryOps.WHERE})]
+      ret = [(idx, self.uop_alu(UOps.ALU, ssa('alu', dtypes._float4) if any(x.dtype == dtypes._float4 and x.offset is None for x in val) else ssa('alu'), list(val), x.op)) for idx, val in get_grouped_maybe_float4(*values, grouping_allowed=self.opts.supports_float4_alu and x.op not in {BinaryOps.CMPLT, TernaryOps.WHERE})]
     ordered_ret: List[Optional[Token]] = [None]*len(values[0])
     # scatter
     for i,j in ret:
@@ -569,7 +574,7 @@ class Linearizer:
     assert len(colors) == self.shape_len, "colors size mismatch"
     return colors
 
-  def colored_shape(self) -> str: return ' '.join(colored(f"{s:4d}", color) for s,color in zip(self.full_shape, self.colors()))
+  def colored_shape(self) -> str: return ' '.join(colored(s, color) for s,color in zip([f"{s:4d}" if isinstance(s, int) else s for s in self.full_shape], self.colors()))
   def printbufs(self, prefix=""):
     for i in range(len(self.sts)):
       print(prefix, f"{i:3d} {str(self.bufs[i].realized) if self.bufs[i].realized is not None else str(self.bufs[i]):47s}", self.sts[i].views)
