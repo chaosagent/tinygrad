@@ -105,7 +105,7 @@ class Node:
     return [MulNode(a, b_sum) if b_sum != 1 else a for a, b_sum in mul_groups.items() if b_sum != 0]
 
   @staticmethod
-  def sum(nodes:List[Node], factoring_allowed=True) -> Node:
+  def sum(nodes:List[Node]) -> Node:
     nodes = [x for x in nodes if x.max or x.min]
     if not nodes: return NumNode(0)
     if len(nodes) == 1: return nodes[0]
@@ -116,7 +116,7 @@ class Node:
       if node.__class__ is NumNode: num_node_sum += node.b
       else: new_nodes.append(node)
 
-    if len(new_nodes) > 1 and factoring_allowed and len(set([x.a if isinstance(x, MulNode) else x for x in new_nodes])) < len(new_nodes):
+    if len(new_nodes) > 1 and len(set([x.a if isinstance(x, MulNode) else x for x in new_nodes])) < len(new_nodes):
       new_nodes = Node.factorize(new_nodes)
     if num_node_sum: new_nodes.append(NumNode(num_node_sum))
     return create_rednode(SumNode, new_nodes) if len(new_nodes) > 1 else new_nodes[0] if len(new_nodes) == 1 else NumNode(0)
@@ -225,13 +225,14 @@ class SumNode(RedNode):
         if x.b%b == 0: fully_divided.append(x//b)
         else:
           rest.append(x)
-          _gcd = 1
-      if _gcd > 1: next_b = _gcd
+          _gcd = gcd(_gcd, x.b)
+          if x.__class__ == MulNode and divisor == 1 and b%x.b == 0: divisor = x.b
       else:
-        return Node.sum(fully_divided, factoring_allowed=False) + Node.__floordiv__(Node.sum(rest, factoring_allowed=False), b)
-      nodes, rest = rest, []
-      b_defer, b = b // next_b, next_b
-    return Node.sum(fully_divided, factoring_allowed=False)
+        rest.append(x)
+        _gcd = 1
+    if _gcd > 1: return Node.sum(fully_divided) + Node.sum(rest).__floordiv__(_gcd) // (b//_gcd)
+    if divisor > 1: return Node.sum(fully_divided) + Node.sum(rest).__floordiv__(divisor) // (b//divisor)
+    return Node.sum(fully_divided) + Node.__floordiv__(Node.sum(rest), b)
 
   def __mod__(self, b: Union[Node, int]):
     if isinstance(b, SumNode):

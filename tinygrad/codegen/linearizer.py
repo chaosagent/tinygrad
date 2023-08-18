@@ -257,8 +257,8 @@ class Linearizer:
       this_const, valid, key = (invalid_value, cast(Variable, Variable.num(1)), f"{localtype}INVALID") if valid.max == 0 else (const, valid, f"{localtype}{idx.render()}{valid.render()}")
       if key not in cache:
         if isinstance(self.bufs[i].dtype, ImageDType): idx = to_image_idx(self.bufs[i].dtype.shape, idx, valid)
-        cache[key] = self.uop(UOps.LOAD, Token(f"{load_type}{mnum(i)}_{len(cache)}", localtype, const_zero=valid.max == 0), [], MemOp(self.get_buffer_name(i), idx, self.bufs[i].__class__ is LocalBuffer, self.bufs[i].dtype, valid, invalid_value)) if const is None else \
-                     self.uop(UOps.LOAD, Token(f"{load_type}{mnum(i)}_{len(cache)}", localtype, const_zero=valid.max == 0), [], ConstOp(const, valid))
+        cache[key] = self.uop(UOps.LOAD, Token(f"{load_type}{mnum(i)}_{len(cache)}", localtype, const_zero=valid.max == 0), [], MemOp(self.get_buffer_name(i), idx, self.bufs[i].__class__ is LocalBuffer, self.bufs[i].dtype, valid, invalid_value)) if this_const is None else \
+                     self.uop(UOps.LOAD, Token(f"{load_type}{mnum(i)}_{len(cache)}", localtype, const_zero=valid.max == 0), [], ConstOp(this_const, valid))
       ret.append(Token(cache[key].name, cache[key].dtype, expanded_nodes[dim].index(_idx[dim])) if localtype != dtypes.float else cache[key])
     return ret
 
