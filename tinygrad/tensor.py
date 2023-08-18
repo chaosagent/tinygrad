@@ -585,7 +585,7 @@ class Tensor:
       dfactors = dfactors.reshape(*HWI, bs, groups, 1, cin, *oyxi).expand(*HWI, bs, groups, rcout, cin, *oyxi)
 
       mfactors = gfactors * dfactors
-      mfactors = mfactors.sum(axis=-1-len(HW))  # sum across cin: (HW4, bs, groups, rcout, *oyx4)
+      mfactors = mfactors.float().sum(axis=-1-len(HW)).half().contiguous()  # sum across cin: (HW4, bs, groups, rcout, *oyx4)
 
       def compute_result(m, dim=0):
         if dim == len(HW):

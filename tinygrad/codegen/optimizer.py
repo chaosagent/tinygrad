@@ -181,7 +181,7 @@ def hand_coded_optimizations(k:Linearizer):
     axis_buf0 = [(i,k.full_shape[i],buf1_strides[i]) for i,s in enumerate(buf0_strides) if s == 0 and k.full_shape[i]%16 == 0]
     axis_buf1 = [(i,k.full_shape[i],buf0_strides[i]) for i,s in enumerate(buf1_strides) if s == 0 and k.full_shape[i]%16 == 0]
     if len(axis_buf0) and len(axis_buf1) and k.full_shape[k.first_reduce]%8 == 0 and (k.shape_len-k.first_reduce) == 1:
-      if DEBUG >= 3: print("HIP TENSOR CORES", axis_buf0, axis_buf1)
+      if DEBUG >= 2: print("HIP TENSOR CORES", axis_buf0, axis_buf1)
       k.use_tensor_cores = getenv("TC", 1) == 1  # TC=2 will do the shape ops without the WMMA
 
       # TODO: select axis in smart way
