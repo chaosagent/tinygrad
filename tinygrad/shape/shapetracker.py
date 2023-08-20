@@ -175,6 +175,9 @@ class ShapeTracker:
 
   def _expr_idx(self, idx, valid):
     for v in reversed(self.views[0:-1]):
+      if valid.max == 0:
+        idx = Variable.num(-1)
+        break
       valid = v.expr_node_mask(idx, valid)
       idx = v.expr_node(idx)
     return idx, valid
@@ -187,11 +190,15 @@ class ShapeTracker:
         self.views = self.views[:-2] + [new_view]
         self.simplify()
 
+  expr_idxs_cache = {}
   def expr_idxs(self, idxs=None):
     if idxs is None: idxs = [Variable(f"idx{i}", 0, s-1) for i,s in enumerate(self.shape)]
-    idx = self.views[-1].expr_idxs(tuple(idxs))
-    valid = self.views[-1].expr_node_mask(idxs_to_idx(self.views[-1].shape, tuple(idxs)))
-    return self._expr_idx(idx, valid)
+    key = (tuple(self.views), tuple(idxs))
+    if key not in ShapeTracker.expr_idxs_cache:
+      idx = self.views[-1].expr_idxs(tuple(idxs))
+      valid = self.views[-1].expr_node_mask(idxs_to_idx(self.views[-1].shape, tuple(idxs)))
+      ShapeTracker.expr_idxs_cache[key] = self._expr_idx(idx, valid)
+    return ShapeTracker.expr_idxs_cache[key]
 
   def expr_node(self, idx='idx'):
     if idx.__class__ is str: idx = Variable(idx, 0, prod(self.shape)-1)
