@@ -202,6 +202,7 @@ class RedNode(Node):
 
 class SumNode(RedNode):
   def __mul__(self, b: Union[Node, int]): return Node.sum([x*b for x in self.nodes]) # distribute mul into sum
+  @functools.lru_cache(maxsize=None)
   def __floordiv__(self, b: Union[Node, int], factoring_allowed=True):
     fully_divided: List[Node] = []
     rest: List[Node] = []

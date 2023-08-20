@@ -51,8 +51,9 @@ class View(ViewInternal):
     if self.mask is not None:
       acc = 1
       for ns,(x,y) in reversed(list(zip(self.shape, self.mask))):
-        base = ((idx//acc) % ns)
-        expr += [base >= x, base < y]
+        if x != 0 or y != ns:
+          base = ((idx//acc) % ns)
+          expr += [base >= x, base < y]
         acc *= ns
     return Variable.ands(expr)
 
