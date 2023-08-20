@@ -101,7 +101,7 @@ def get_grouped_maybe_float4(*values:List[Token], grouping_allowed=True):
 
 # TODO: generic visitor pattern?
 def expand_node(idx:Node) -> List[Node]:
-  if isinstance(idx, Variable): return [idx] if idx.expr is not None else [Variable.num(j) for j in range(idx.min, idx.max+1)]
+  if isinstance(idx, Variable): return [idx] if not (idx.expr.startswith("uidx") or idx.expr.startswith("alidx")) else [Variable.num(j) for j in range(idx.min, idx.max+1)]
   if isinstance(idx, NumNode): return [idx]
   if isinstance(idx, MulNode): return [x*idx.b for x in expand_node(idx.a)]
   if isinstance(idx, SumNode): return [Variable.sum(list(it)) for it in itertools.product(*[expand_node(x) for x in idx.nodes])]
@@ -233,6 +233,8 @@ class Linearizer:
     load_type = "val" if const is None else "acc"
     if isinstance(self.bufs[i].realized, RawConst): const = self.bufs[i].realized._buf
 
+    g_idx, g_valid = self.sts[i].expr_idxs(idxs)
+
     expanded_nodes = [expand_node(idx) for idx in idxs]
     _idxs = [x[::-1] for x in itertools.product(*expanded_nodes[::-1])]
     upcast_dim = self.get_upcast_dim(i)
@@ -246,13 +248,17 @@ class Linearizer:
     invalid_value = 0 if dtypes.is_int(self.bufs[i].dtype) else 0.0
     for _idx in _idxs:
       if amt > 1:
-        idx, valid = self.sts[i].expr_idxs((_idx[:dim] + (expanded_nodes[dim][0],) + _idx[dim+1:]))
+        substitute = {a:b for a,b in zip(idxs, _idx[:dim] + (expanded_nodes[dim][0],) + _idx[dim+1:])}
+        idx, valid = g_idx.substitute(substitute), g_valid.substitute(substitute)
         localtype = dtypes._float4 if amt == 4 else dtypes._float2
         if idx.render() != ((idx//amt)*amt).render():
-          idx, valid = self.sts[i].expr_idxs(_idx)
+          idx, valid = g_idx.substitute({a: b for a, b in zip(idxs, _idx)}), g_valid.substitute({a: b for a, b in zip(idxs, _idx)})
           localtype = dtypes.float32
       else:
-        idx, valid = self.sts[i].expr_idxs(_idx)
+        idx, valid = g_idx.substitute({a:b for a,b in zip(idxs, _idx)}), g_valid.substitute({a:b for a,b in zip(idxs, _idx)})
+        # idx2, valid2 = self.sts[i].expr_idxs(_idx)
+        # if idx.render() != idx2.render() and idx2 != Variable.num(-1): print('idx', idxs, _idx, idx.render(), idx2.render())
+        # if valid.render() != valid2.render(): print('valid', idxs, _idx, valid.render(), valid2.render())
         localtype = dtypes.float32
       this_const, valid, key = (invalid_value, cast(Variable, Variable.num(1)), f"{localtype}INVALID") if valid.max == 0 else (const, valid, f"{localtype}{idx.render()}{valid.render()}")
       if key not in cache:
@@ -347,8 +353,8 @@ class Linearizer:
     self.uop(UOps.LOOP, None, [], (local_idxs, "local"))
 
     # upcast indexes
-    full_upcast_idxs = [Variable(None, 0, s-1) for s in self.full_shape[self.shape_len-self.upcasted:]]
-    upcast_idxs = [Variable(None, 0, s-1) for s in self.output_shape[self.shape_len-self.upcasted:]]
+    full_upcast_idxs = [Variable(f"uidx{i}", 0, self.full_shape[i]-1) for i in range(self.shape_len-self.upcasted, self.shape_len)]
+    upcast_idxs = [Variable(f"uidx{i}", 0, self.output_shape[i]-1) for i in range(self.shape_len-self.upcasted, self.shape_len)]
 
     # reduce op
     fake_reduce_idxs = []
@@ -390,7 +396,7 @@ class Linearizer:
               extra_locals.remove(elc[0])
               elc = [el for el in extra_locals if v.min == el.min and rem%(el.max+1) == 0]
             if DEBUG >= 4 and rem > 1: print(f"failed upcasting partial stride {rem} extra locals {extra_locals}")
-            this_upcast_idxs.append(tacc + Variable(None, 0, rem-1))
+            this_upcast_idxs.append(tacc + Variable(f"alidx{j}", 0, rem-1))
           else:
             if DEBUG >= 4: print(f"failed upcasting stride {v} extra locals {extra_locals}")
             this_upcast_idxs.append(v)
@@ -438,7 +444,7 @@ class Linearizer:
           self.group_for_reduce.pop()
           local_idxs = local_idxs[:-1]
           # regenerate upcast_idxs
-          upcast_idxs = [Variable(None, 0, s-1) for s in self.output_shape[self.shape_len-self.upcasted:]]
+          upcast_idxs = [Variable(f"uidx{i}", 0, self.output_shape[i] - 1) for i in range(self.shape_len - self.upcasted, self.shape_len)]
 
         # NOTE: this structure is the same as the reduce op above
 

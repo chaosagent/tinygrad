@@ -14,6 +14,7 @@ class Node:
   b: Union[Node, int]
   min: int
   max: int
+  def substitute(self, m): return self.render(substitute_ops, m)
   def render(self, ops=None, ctx=None, strip_parens=False) -> str:
     if ops is None: ops = render_python
     assert self.__class__ in (Variable, NumNode) or self.min != self.max
@@ -285,4 +286,15 @@ render_python: Dict[Type, Callable] = {
   LtNode: lambda self,ops,ctx: f"({self.a.render(ops,ctx)}<{sym_render(self.b,ops,ctx)})",
   SumNode: lambda self,ops,ctx: f"({'+'.join(sorted([x.render(ops,ctx) for x in self.nodes]))})",
   AndNode: lambda self,ops,ctx: f"({' and '.join(sorted([x.render(ops,ctx) for x in self.nodes]))})"
+}
+
+substitute_ops = {
+  Variable: lambda self, ops, m: m[self] if self in m else self,
+  NumNode: lambda self, ops, m: self,
+  MulNode: lambda self, ops, m: self.a.render(ops, m) * (self.b.render(ops, m) if isinstance(self.b, Node) else self.b),
+  DivNode: lambda self, ops, m: self.a.render(ops, m) // (self.b.render(ops, m) if isinstance(self.b, Node) else self.b),
+  ModNode: lambda self, ops, m: self.a.render(ops, m) % (self.b.render(ops, m) if isinstance(self.b, Node) else self.b),
+  LtNode: lambda self, ops, m: self.a.render(ops, m) < (self.b.render(ops, m) if isinstance(self.b, Node) else self.b),
+  SumNode: lambda self, ops, m: Node.sum([n.render(ops, m) for n in self.nodes]),
+  AndNode: lambda self, ops, m: Node.ands([n.render(ops, m) for n in self.nodes]),
 }
