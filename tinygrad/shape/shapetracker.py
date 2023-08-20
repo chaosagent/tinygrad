@@ -209,9 +209,7 @@ class ShapeTracker:
 
   def axis_needs_valid(self, axis) -> bool:
     idx, valid = self.expr_idxs()
-    valid_render = valid.render()
-    return f'idx{axis}' in valid_render # lmaoooo
-    return any([v.mask is not None and v.mask[axis] != (0, v.shape[axis]) for v in self.views])
+    return f'idx{axis}' in [v.expr for v in valid.vars()]
 
   # *** under this line are the movement ops ***
 
