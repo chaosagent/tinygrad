@@ -44,9 +44,7 @@ def kernel_optimize_search(k:Linearizer, create_k:Callable[[], Linearizer], to_p
       k = create_k()
       k.process()
       apply_opt(k, x)
-      t = time.monotonic()
       prg = to_prg(k)
-      if DEBUG >= 2: print(f"to_prg {time.monotonic() - t:.2f}s")
       first_tm = prg.exec(k.bufs, force_wait=True, optimizing=True)
       #if baseline*5 < first_tm*1000: return first_tm*1000  # very slow
       tm = min([first_tm]+[prg.exec(k.bufs, force_wait=True, optimizing=True) for _ in range(20)])*1000
@@ -88,14 +86,14 @@ def kernel_optimize(k:Linearizer, create_k:Callable[[], Linearizer], to_prg):
   k.process()
   skey = str(k.key)
 
-  if getenv("KOPT") == 2 or getenv("KOPT") == 3 and global_db is None:
+  if (getenv("KOPT") == 2 or getenv("KOPT") == 3) and global_db is None:
     import shelve
     global_db = shelve.open("./kopt_cache")
 
   choice = "BASELINE"
   baseline_k = None
   if global_db is not None and skey in global_db:
-    print('loading kopt from cache')
+    if DEBUG >= 2: print('loading kopt from cache')
     choice = global_db[skey]
   elif getenv("KOPT") != 3:
     # get baseline
