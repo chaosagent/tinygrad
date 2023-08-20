@@ -193,7 +193,7 @@ class ShapeTracker:
   expr_idxs_cache = {}
   def expr_idxs(self, idxs=None):
     if idxs is None: idxs = [Variable(f"idx{i}", 0, s-1) for i,s in enumerate(self.shape)]
-    key = (tuple(self.views), tuple(idxs))
+    key = (self.key, tuple(idxs))
     if key not in ShapeTracker.expr_idxs_cache:
       idx = self.views[-1].expr_idxs(tuple(idxs))
       valid = self.views[-1].expr_node_mask(idxs_to_idx(self.views[-1].shape, tuple(idxs)))
