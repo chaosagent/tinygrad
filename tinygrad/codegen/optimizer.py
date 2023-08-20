@@ -44,7 +44,9 @@ def kernel_optimize_search(k:Linearizer, create_k:Callable[[], Linearizer], to_p
       k = create_k()
       k.process()
       apply_opt(k, x)
+      t = time.monotonic()
       prg = to_prg(k)
+      if DEBUG >= 2: print(f"to_prg {time.monotonic() - t:.2f}s")
       first_tm = prg.exec(k.bufs, force_wait=True, optimizing=True)
       #if baseline*5 < first_tm*1000: return first_tm*1000  # very slow
       tm = min([first_tm]+[prg.exec(k.bufs, force_wait=True, optimizing=True) for _ in range(20)])*1000
@@ -108,7 +110,7 @@ def kernel_optimize(k:Linearizer, create_k:Callable[[], Linearizer], to_prg):
 
       return baseline, suggestion, k
     baseline, suggestion, baseline_k = get_baseline()
-    if baseline > 0.5:
+    if baseline > 0.1:
       choice = kernel_optimize_search(k, create_k, to_prg, baseline, suggestion)
       if global_db is not None:
         global_db[skey] = choice
