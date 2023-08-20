@@ -201,6 +201,7 @@ class RedNode(Node):
   def vars(self): return functools.reduce(lambda l,x: l+x.vars(), self.nodes, [])
 
 class SumNode(RedNode):
+  @functools.lru_cache(maxsize=None)
   def __mul__(self, b: Union[Node, int]): return Node.sum([x*b for x in self.nodes]) # distribute mul into sum
   @functools.lru_cache(maxsize=None)
   def __floordiv__(self, b: Union[Node, int], factoring_allowed=True):
@@ -235,6 +236,7 @@ class SumNode(RedNode):
     if divisor > 1: return Node.sum(fully_divided) + Node.sum(rest).__floordiv__(divisor) // (b//divisor)
     return Node.sum(fully_divided) + Node.__floordiv__(Node.sum(rest), b)
 
+  @functools.lru_cache(maxsize=None)
   def __mod__(self, b: Union[Node, int]):
     if isinstance(b, SumNode):
       nu_num = sum(node.b for node in self.flat_components if node.__class__ is NumNode)
@@ -250,9 +252,9 @@ class SumNode(RedNode):
 
   @property
   def flat_components(self): # recursively expand sumnode components
-    new_nodes = []
-    for x in self.nodes: new_nodes += (x.flat_components if isinstance(x, SumNode) else [x])
-    return new_nodes
+    for x in self.nodes:
+      if isinstance(x, SumNode): yield from x.flat_components
+      else: yield x
 
 class AndNode(RedNode):
   def __mul__(self, b: Union[Node, int]): Variable.ands([x*b for x in self.nodes])
