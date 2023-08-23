@@ -310,11 +310,22 @@ def hand_coded_optimizations(k:Linearizer):
     for axis in range(k.first_reduce - k.local_dims - 1, -1, -1):
       local_size = prod(k.full_shape[k.first_reduce-k.local_dims:k.first_reduce])
       if k.full_shape[axis] == 1: continue
-      last_try = k.local_dims == 0 and axis == 0
-      if any(k.sts[buf_index].views[-1].strides[axis] == 0 for buf_index in range(len(k.sts))) or last_try:
-        for sz in [x for x in (([32] if last_try else []) + [16,8,4,3]) if k.full_shape[axis] % x == 0 and local_size*x <= 128]:
+      if any(k.sts[buf_index].views[-1].strides[axis] == 0 for buf_index in range(len(k.sts))):
+        for sz in [x for x in ([16,8,4,3]) if k.full_shape[axis] % x == 0 and local_size*x <= 128]:
           k.shift_to(axis, sz, insert_before=k.first_reduce-k.local_dims)
           k.local_dims += 1
           break
       if k.local_dims >= 3: break
+
+    if not k.local_dims:
+      for axis in range(k.first_reduce - k.local_dims - 1, -1, -1):
+        local_size = prod(k.full_shape[k.first_reduce-k.local_dims:k.first_reduce])
+        if local_size >= 32: break
+        last_try = k.local_dims == 0 and axis == 0
+        for sz in [x for x in [32] * last_try + [16,8,4,3] if k.full_shape[axis] % x == 0 and local_size * x <= 128]:
+          k.shift_to(axis, sz, insert_before=k.first_reduce - k.local_dims)
+          k.local_dims += 1
+          break
+        if k.local_dims >= 3: break
+
   k.simplify_ones()

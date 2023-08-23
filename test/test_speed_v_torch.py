@@ -42,7 +42,7 @@ def colorize_float(x):
     return colored(ret, 'yellow')
 
 save_ops, save_mem = 0, 0
-CNT = 8
+CNT = 20
 def helper_test_speed(f1, *args):
   global save_ops, save_mem
   ets = []
