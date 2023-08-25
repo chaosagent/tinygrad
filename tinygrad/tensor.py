@@ -538,7 +538,7 @@ class Tensor:
       wino_padding = sum([[padding_[i*2], padding_[i*2+1] + (-(dim + sum(padding_[i * 2:(i + 1) * 2]) - 2) % 4)] for i, dim in enumerate(self.shape[-len(HW):])], [])
 
       HWI, HWO = (6,) * len(HW), (4,) * len(HW)  # F(4x4,3x3) winograd tiles
-      d = self.pad2d(wino_padding)._pool(HWI, tuple([hwo * d for hwo, d in zip(HWO, [dilation]*len(HW) if not isinstance(dilation, (tuple, list)) else dilation)]), dilation)  # (bs, cin_, tyx, HWI)
+      d = self.pad2d(wino_padding)._pool(HWI, HWO)  # (bs, cin_, tyx, HWI)
       tyx = d.shape[2:-len(HWI)]  # dim of tiling
 
       d = d.permute(*range(len(d.shape)-len(HW),len(d.shape)), *range(len(d.shape)-len(HW))).contiguous_backward()  # move HW to the front: # (HWI, bs, cin_, tyx)
