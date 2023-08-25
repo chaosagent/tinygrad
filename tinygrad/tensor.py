@@ -514,7 +514,6 @@ class Tensor:
     if isinstance(padding, (tuple, list)): assert len(padding) == 2 * len(HW) or len(padding) == len(HW), f"Expected padding of length {2 * len(HW)} or {len(HW)}, but got {len(padding)} for tensor of shape {self.shape}"
     padding_ = [padding] * 2 * len(HW) if isinstance(padding, int) else (list(padding) if len(padding) == 2 * len(HW) else [p for p in padding for _ in range(2)][::-1])
     if not all(x == 3 for x in HW) or stride != 1 or dilation != 1 or getenv('NORMAL_CONV', 0):
-
       # conv2d is a pooling op (with padding)
       x = self.pad2d(padding_)._pool(HW, stride, dilation)   # (bs, groups*cin, oy, ox, H, W)
       rcout, oyx = cout//groups, x.shape[2:-len(HW)]
@@ -531,29 +530,28 @@ class Tensor:
     else:
       # winograd conv 3 kernel f(4x4,3x3) see: http://arxiv.org/abs/1509.09308
       # todo: stride == dilation
-      wino_padding = [p for p in padding_]
-      for i, dim in enumerate(self.shape[-len(HW):]): wino_padding[i * 2 + 1] += -(dim + sum(padding_[i * 2:(i + 1) * 2]) - 2) % 4
+      wino_padding = sum([[padding_[i*2], padding_[i*2+1] + (-(dim + sum(padding_[i * 2:(i + 1) * 2]) - 2) % 4)] for i, dim in enumerate(self.shape[-len(HW):])], [])
 
       HWI, HWO = (6,) * len(HW), (4,) * len(HW)  # F(4x4,3x3) winograd tiles
       x = self.pad2d(wino_padding)._pool(HWI, tuple([hwo * d for hwo, d in zip(HWO, [dilation]*len(HW) if not isinstance(dilation, (tuple, list)) else dilation)]), dilation)
       rcout, oyx = cout // groups, x.shape[2:-len(HWI)]
 
-      # x: (bs, groups, cin, oyx, HWI)
+      # x: (bs, cin_, oyx, HWI)
 
       x = x.permute(*list(range(len(x.shape)-len(HW),len(x.shape))), *list(range(len(x.shape)-len(HW)))).contiguous_backward()  # move HW to the front
       g = weight.reshape(1, groups, rcout, cin, *([1]*len(oyx)), *HW)
       g = g.permute(*list(range(len(g.shape)-len(HW),len(g.shape))), *list(range(len(g.shape)-len(HW))))  # move HW to the front
 
-      # x: (HWI, bs, groups, cin, oyx)
+      # x: (HWI, bs, cin_, oyx)
 
       def apply_matrix(mat, t, dim=0): return t if dim == len(HW) else Tensor.stack([apply_matrix(mat, sum(mat[i][j] * t[j] for j in range(len(mat[i]))), dim=dim+1) for i in range(len(mat))])
       winograd_Bt = [[4, 0, -5, 0, 1, 0], [0, -4, -4, 1, 1, 0], [0, 4, -4, -1, 1, 0], [0, -2, -1, 2, 1, 0], [0, 2, -1, -2, 1, 0], [0, 4, 0, -5, 0, 1]]
       winograd_G = [[1/4, 0, 0], [-1/6, -1/6, -1/6], [-1/6, 1/6, -1/6], [1/24, 1/12, 1/6], [1/24, -1/12, 1/6], [0, 0, 1]]
-      winograd_At = [[1, 1, 1, 1, 1, 0], [0, 1, -1, 2, -2, 0], [0, 1, 1, 4, 4, 0], [0, 1, -1, 8, -8, 1]]
+      winograd_At = [[1, 1, 1, 1, 1, 0], [0, 1, -1, 2, -2, 0], [0, 1, 1, 4, 4, 0], [0, 1, -1, 8, -8, 1]]  # applying At in pre-order almost doubles compilation time
 
       # compute 6x6 winograd tiles: GgGt, BtdB
       gfactors = apply_matrix(winograd_G, g).contiguous()  # (HWI, bs=1, groups, rcout, cin, oyx=(1,1))
-      dfactors = apply_matrix(winograd_Bt, x).contiguous()  # (HWI, bs, groups, cin, oyx)
+      dfactors = apply_matrix(winograd_Bt, x).contiguous()  # (HWI, bs, cin_, oyx)
 
       dfactors = dfactors.reshape(*HWI, bs, groups, 1, cin, *oyx).expand(*HWI, bs, groups, rcout, cin, *oyx)
 
@@ -563,7 +561,7 @@ class Tensor:
 
       ret = ret.permute([*range(len(HW), len(ret.shape)-len(HW)), *[i+o for i in range(len(HW)) for o in [len(ret.shape)-len(HW),0]]])  # interleave oyx and HWO: (bs, groups, rcout, oy, HO, ox, WO)
       ret = ret.reshape(bs, cout, *[c * HWO[i] for i, c in enumerate(oyx)])  # merge groups and rcout, oyx and HWO: (bs, groups, cout, *yx)
-      ret = ret.shrink(tuple((0, s) for s in [bs, cout, *[self.shape[-len(HW) + i] + padding_[i*2] + padding_[i*2+1] - 2 for i in range(len(HW))]]))  # remove extra winograd padding
+      ret = ret.shrink(tuple((0, s) for s in [bs, cout, *[self.shape[-len(HW) + i] + padding_[i*2] + padding_[i*2+1] - 2 for i in range(len(HW))]]))  # remove extra winograd tile padding
 
     return (ret if bias is None else ret.add(bias.reshape(1, -1, *[1 for _ in range(len(HW))]))).contiguous().contiguous_backward()
 
