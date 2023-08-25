@@ -541,7 +541,7 @@ class Tensor:
       d = d.permute(*range(len(d.shape)-len(HW),len(d.shape)), *range(len(d.shape)-len(HW))).contiguous_backward()  # move HW to the front: # (HWI, bs, cin_, tyx)
       tyx = d.shape[-len(HWI):]  # dim of tiling
 
-      g = weight.permute(*range(len(weight.shape)-len(HW),len(weight.shape)), *range(len(weight.shape)-len(HW))).reshape(1, groups, rcout, cin, *([1]*len(tyx)), *HW)  # move HW to the front and expand
+      g = weight.permute(*range(len(weight.shape)-len(HW),len(weight.shape)), *range(len(weight.shape)-len(HW))).reshape(*HW, 1, groups, rcout, cin, *([1]*len(tyx)))  # move HW to the front and expand
 
       # compute 6x6 winograd tiles: GgGt, BtdB
       gfactors = apply_matrix(winograd_G, g).contiguous()  # (HWI, bs=1, groups, rcout, cin, tyx=(1,1))
