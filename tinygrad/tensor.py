@@ -529,7 +529,7 @@ class Tensor:
       # conv! broadcasted to (bs, groups, rcout, *oyx, cin, *HW)
       ret = (x * weight.reshape(1, groups, rcout, *[1 for _ in range(len(oyx))], cin, *HW)).sum([-1-i for i in range(1+len(oyx))], keepdim=True).reshape(bs, cout, *oyx)
     else:
-      # winograd conv 3 kernel f(4x4,3x3)
+      # winograd conv 3 kernel f(4x4,3x3) see: http://arxiv.org/abs/1509.09308
       # todo: stride == dilation
       wino_padding = [p for p in padding_]
       for i, dim in enumerate(self.shape[-len(HW):]): wino_padding[i * 2 + 1] += -(dim + sum(padding_[i * 2:(i + 1) * 2]) - 2) % 4
@@ -546,49 +546,20 @@ class Tensor:
 
       # x: (HWI, bs, groups, cin, oyx)
 
-      # compute 6x6 g
-      def compute_g(g_, dim=0):
-        if dim == len(HW):
-          return g_
-        g0 = compute_g(g_[0]/4, dim=dim + 1)
-        g1 = compute_g(-(g_[0] + g_[1] + g_[2]) / 6, dim=dim + 1)
-        g2 = compute_g(-(g_[0] - g_[1] + g_[2]) / 6, dim=dim + 1)
-        g3 = compute_g(g_[0]/24 + g_[1]/12 + g_[2]/6, dim=dim + 1)
-        g4 = compute_g(g_[0]/24 - g_[1]/12 + g_[2]/6, dim=dim + 1)
-        g5 = compute_g(g_[2], dim=dim + 1)
-        return Tensor.stack([g0, g1, g2, g3, g4, g5])
+      def apply_matrix(mat, t, dim=0): return t if dim == len(HW) else Tensor.stack([apply_matrix(mat, sum(mat[i][j] * t[j] for j in range(len(mat[i]))), dim=dim+1) for i in range(len(mat))])
+      winograd_Bt = [[4, 0, -5, 0, 1, 0], [0, -4, -4, 1, 1, 0], [0, 4, -4, -1, 1, 0], [0, -2, -1, 2, 1, 0], [0, 2, -1, -2, 1, 0], [0, 4, 0, -5, 0, 1]]
+      winograd_G = [[1/4, 0, 0], [-1/6, -1/6, -1/6], [-1/6, 1/6, -1/6], [1/24, 1/12, 1/6], [1/24, -1/12, 1/6], [0, 0, 1]]
+      winograd_At = [[1, 1, 1, 1, 1, 0], [0, 1, -1, 2, -2, 0], [0, 1, 1, 4, 4, 0], [0, 1, -1, 8, -8, 1]]
 
-      gfactors = compute_g(g).contiguous()  # (HWI, bs=1, groups, rcout, cin, oyx=(1,1))
-
-      def compute_dfactors(d, dim=0):
-        if dim == len(HW):
-          return d
-        d0 = compute_dfactors(4 * d[0] - 5 * d[2] + d[4], dim=dim + 1)
-        d1 = compute_dfactors(-4 * d[1] - 4 * d[2] + d[3] + d[4], dim=dim + 1)
-        d2 = compute_dfactors(4 * d[1] - 4 * d[2] - d[3] + d[4], dim=dim + 1)
-        d3 = compute_dfactors(-2 * d[1] - 1 * d[2] + 2 * d[3] + d[4], dim=dim + 1)
-        d4 = compute_dfactors(2 * d[1] - 1 * d[2] - 2 * d[3] + d[4], dim=dim + 1)
-        d5 = compute_dfactors(4 * d[1] - 5 * d[3] + d[5], dim=dim + 1)
-        return Tensor.stack([d0, d1, d2, d3, d4, d5])
-
-      dfactors = compute_dfactors(x).contiguous()  # (HWI, bs, groups, cin, oyx)
+      # compute 6x6 winograd tiles: GgGt, BtdB
+      gfactors = apply_matrix(winograd_G, g).contiguous()  # (HWI, bs=1, groups, rcout, cin, oyx=(1,1))
+      dfactors = apply_matrix(winograd_Bt, x).contiguous()  # (HWI, bs, groups, cin, oyx)
 
       dfactors = dfactors.reshape(*HWI, bs, groups, 1, cin, *oyx).expand(*HWI, bs, groups, rcout, cin, *oyx)
 
-      mfactors = gfactors * dfactors
-      mfactors = mfactors.sum(axis=-1-len(HW))  # sum across cin: (HWI, bs, groups, rcout, *oyx)
+      mfactors = (gfactors * dfactors).sum(axis=-1-len(HW))  # matmul; sum across cin: (HWI, bs, groups, rcout, *oyx)
 
-      def compute_result(m, dim=0):
-        if dim == len(HW):
-          return m
-        mm = [compute_result(m[i], dim=dim+1) for i in range(6)]
-        r0 = mm[0] + mm[1] + mm[2] + mm[3] + mm[4]
-        r1 = mm[1] - mm[2] + 2 * mm[3] - 2 * mm[4]
-        r2 = mm[1] + mm[2] + 4 * mm[3] + 4 * mm[4]
-        r3 = mm[1] - mm[2] + 8 * mm[3] - 8 * mm[4] + mm[5]
-        return Tensor.stack([r0, r1, r2, r3])
-
-      ret = compute_result(mfactors)  # outputs 4x4 result from 6x6 block: (HWO, bs, groups, rcout, *oyx)
+      ret = apply_matrix(winograd_At, mfactors)  # outputs 4x4 result from 6x6 block: (HWO, bs, groups, rcout, *oyx)
 
       ret = ret.permute([*range(len(HW), len(ret.shape)-len(HW)), *[i+o for i in range(len(HW)) for o in [len(ret.shape)-len(HW),0]]])  # interleave oyx and HWO: (bs, groups, rcout, oy, HO, ox, WO)
       ret = ret.reshape(bs, cout, *[c * HWO[i] for i, c in enumerate(oyx)])  # merge groups and rcout, oyx and HWO: (bs, groups, cout, *yx)
