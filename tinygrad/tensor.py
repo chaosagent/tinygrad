@@ -513,10 +513,10 @@ class Tensor:
     assert groups*cin == cin_ and len(self.shape) == len(weight.shape), f"Input Tensor shape {self.shape} does not match the shape of the weights {weight.shape}. ({groups*cin} vs. {cin_})"
     if isinstance(padding, (tuple, list)): assert len(padding) == 2 * len(HW) or len(padding) == len(HW), f"Expected padding of length {2 * len(HW)} or {len(HW)}, but got {len(padding)} for tensor of shape {self.shape}"
     padding_ = [padding] * 2 * len(HW) if isinstance(padding, int) else (list(padding) if len(padding) == 2 * len(HW) else [p for p in padding for _ in range(2)][::-1])
+    # conv2d is a pooling op (with padding)
+    x = self.pad2d(padding_)._pool(HW, stride, dilation)  # (bs, groups*cin, oy, ox, H, W)
+    rcout, oyx = cout // groups, x.shape[2:-len(HW)]
     if not all(x == 3 for x in HW) or stride != 1 or dilation != 1 or getenv('NORMAL_CONV', 0):
-      # conv2d is a pooling op (with padding)
-      x = self.pad2d(padding_)._pool(HW, stride, dilation)   # (bs, groups*cin, oy, ox, H, W)
-      rcout, oyx = cout//groups, x.shape[2:-len(HW)]
       x = x.reshape(bs, groups, cin, 1, *oyx, *HW).expand(bs, groups, cin, rcout, *oyx, *HW).permute(0,1,3,*[4+i for i in range(len(oyx))],2,*[4+len(oyx)+i for i in range(len(HW))])
 
       # expand the channels with the pool
@@ -529,39 +529,31 @@ class Tensor:
       ret = (x * weight.reshape(1, groups, rcout, *[1 for _ in range(len(oyx))], cin, *HW)).sum([-1-i for i in range(1+len(oyx))], keepdim=True).reshape(bs, cout, *oyx)
     else:
       # winograd conv 3 kernel f(4x4,3x3) see: http://arxiv.org/abs/1509.09308
-      # todo: stride == dilation
-      wino_padding = sum([[padding_[i*2], padding_[i*2+1] + (-(dim + sum(padding_[i * 2:(i + 1) * 2]) - 2) % 4)] for i, dim in enumerate(self.shape[-len(HW):])], [])
-
-      HWI, HWO = (6,) * len(HW), (4,) * len(HW)  # F(4x4,3x3) winograd tiles
-      x = self.pad2d(wino_padding)._pool(HWI, tuple([hwo * d for hwo, d in zip(HWO, [dilation]*len(HW) if not isinstance(dilation, (tuple, list)) else dilation)]), dilation)
-      rcout, oyx = cout // groups, x.shape[2:-len(HWI)]
-
-      # x: (bs, cin_, oyx, HWI)
-
-      x = x.permute(*range(len(x.shape)-len(HW),len(x.shape)), *range(len(x.shape)-len(HW))).contiguous_backward()  # move HW to the front
-      g = weight.reshape(1, groups, rcout, cin, *([1]*len(oyx)), *HW)
-      g = g.permute(*range(len(g.shape)-len(HW),len(g.shape)), *range(len(g.shape)-len(HW)))  # move HW to the front
-
-      # x: (HWI, bs, cin_, oyx)
-
       def apply_matrix(mat, t, dim=0): return t if dim == len(HW) else Tensor.stack([apply_matrix(mat, sum(mat[i][j] * t[j] for j in range(len(mat[i]))), dim=dim+1) for i in range(len(mat))])
       winograd_Bt = [[4, 0, -5, 0, 1, 0], [0, -4, -4, 1, 1, 0], [0, 4, -4, -1, 1, 0], [0, -2, -1, 2, 1, 0], [0, 2, -1, -2, 1, 0], [0, 4, 0, -5, 0, 1]]
       winograd_G = [[1/4, 0, 0], [-1/6, -1/6, -1/6], [-1/6, 1/6, -1/6], [1/24, 1/12, 1/6], [1/24, -1/12, 1/6], [0, 0, 1]]
       winograd_At = [[1, 1, 1, 1, 1, 0], [0, 1, -1, 2, -2, 0], [0, 1, 1, 4, 4, 0], [0, 1, -1, 8, -8, 1]]  # applying At in pre-order almost doubles compilation time
 
+      # todo: stride == dilation
+      wino_padding = sum([[padding_[i*2], padding_[i*2+1] + (-(dim + sum(padding_[i * 2:(i + 1) * 2]) - 2) % 4)] for i, dim in enumerate(self.shape[-len(HW):])], [])
+
+      HWI, HWO = (6,) * len(HW), (4,) * len(HW)  # F(4x4,3x3) winograd tiles
+      d = self.pad2d(wino_padding)._pool(HWI, tuple([hwo * d for hwo, d in zip(HWO, [dilation]*len(HW) if not isinstance(dilation, (tuple, list)) else dilation)]), dilation)  # (bs, cin_, tyx, HWI)
+      tyx = d.shape[2:-len(HWI)]  # dim of tiling
+
+      d = d.permute(*range(len(d.shape)-len(HW),len(d.shape)), *range(len(d.shape)-len(HW))).contiguous_backward()  # move HW to the front: # (HWI, bs, cin_, tyx)
+      g = weight.reshape(1, groups, rcout, cin, *([1]*len(tyx)), *HW)
+      g = g.permute(*range(len(g.shape)-len(HW),len(g.shape)), *range(len(g.shape)-len(HW)))  # move HW to the front
+
       # compute 6x6 winograd tiles: GgGt, BtdB
-      gfactors = apply_matrix(winograd_G, g).contiguous()  # (HWI, bs=1, groups, rcout, cin, oyx=(1,1))
-      dfactors = apply_matrix(winograd_Bt, x).contiguous()  # (HWI, bs, cin_, oyx)
+      gfactors = apply_matrix(winograd_G, g).contiguous()  # (HWI, bs=1, groups, rcout, cin, tyx=(1,1))
+      dfactors = apply_matrix(winograd_Bt, d).contiguous().reshape(*HWI, bs, groups, 1, cin, *tyx).expand(*HWI, bs, groups, rcout, cin, *tyx)  # (HWI, bs, cin_, tyx) -> (HWI, bs, groups, rcout,cin, *tyx)
 
-      dfactors = dfactors.reshape(*HWI, bs, groups, 1, cin, *oyx).expand(*HWI, bs, groups, rcout, cin, *oyx)
+      ret = apply_matrix(winograd_At, (gfactors * dfactors).sum(axis=-1-len(HW)))  # matmul; sum across cin: (HWI, bs, groups, rcout, *tyx); then HWI -> HWO: (HWO, bs, groups, rcout, *tyx)
 
-      mfactors = (gfactors * dfactors).sum(axis=-1-len(HW))  # matmul; sum across cin: (HWI, bs, groups, rcout, *oyx)
-
-      ret = apply_matrix(winograd_At, mfactors)  # outputs 4x4 result from 6x6 block: (HWO, bs, groups, rcout, *oyx)
-
-      ret = ret.permute([*range(len(HW), len(ret.shape)-len(HW)), *[i+o for i in range(len(HW)) for o in [len(ret.shape)-len(HW),0]]])  # interleave oyx and HWO: (bs, groups, rcout, oy, HO, ox, WO)
-      ret = ret.reshape(bs, cout, *[c * HWO[i] for i, c in enumerate(oyx)])  # merge groups and rcout, oyx and HWO: (bs, groups, cout, *yx)
-      ret = ret.shrink(tuple((0, s) for s in [bs, cout, *[self.shape[-len(HW) + i] + padding_[i*2] + padding_[i*2+1] - 2 for i in range(len(HW))]]))  # remove extra winograd tile padding
+      ret = ret.permute([*range(len(HW), len(ret.shape)-len(HW)), *[i+o for i in range(len(HW)) for o in [len(ret.shape)-len(HW),0]]])  # interleave tyx and HWO: (bs, groups, rcout, oy, HO, ox, WO)
+      ret = ret.reshape(bs, cout, *[c * HWO[i] for i, c in enumerate(tyx)])  # merge groups and rcout, tyx and HWO: (bs, groups, cout, *yx)
+      ret = ret.shrink(tuple((0, s) for s in [bs, cout, *oyx]))  # remove extra winograd tile padding
 
     return (ret if bias is None else ret.add(bias.reshape(1, -1, *[1 for _ in range(len(HW))]))).contiguous().contiguous_backward()
 
