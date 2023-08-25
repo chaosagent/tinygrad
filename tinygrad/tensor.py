@@ -538,9 +538,9 @@ class Tensor:
 
       # x: (bs, cin_, oyx, HWI)
 
-      x = x.permute(*list(range(len(x.shape)-len(HW),len(x.shape))), *list(range(len(x.shape)-len(HW)))).contiguous_backward()  # move HW to the front
+      x = x.permute(*range(len(x.shape)-len(HW),len(x.shape)), *range(len(x.shape)-len(HW))).contiguous_backward()  # move HW to the front
       g = weight.reshape(1, groups, rcout, cin, *([1]*len(oyx)), *HW)
-      g = g.permute(*list(range(len(g.shape)-len(HW),len(g.shape))), *list(range(len(g.shape)-len(HW))))  # move HW to the front
+      g = g.permute(*range(len(g.shape)-len(HW),len(g.shape)), *range(len(g.shape)-len(HW)))  # move HW to the front
 
       # x: (HWI, bs, cin_, oyx)
 
