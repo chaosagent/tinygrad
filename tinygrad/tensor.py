@@ -513,47 +513,38 @@ class Tensor:
     assert groups*cin == cin_ and len(self.shape) == len(weight.shape), f"Input Tensor shape {self.shape} does not match the shape of the weights {weight.shape}. ({groups*cin} vs. {cin_})"
     if isinstance(padding, (tuple, list)): assert len(padding) == 2 * len(HW) or len(padding) == len(HW), f"Expected padding of length {2 * len(HW)} or {len(HW)}, but got {len(padding)} for tensor of shape {self.shape}"
     padding_ = [padding] * 2 * len(HW) if isinstance(padding, int) else (list(padding) if len(padding) == 2 * len(HW) else [p for p in padding for _ in range(2)][::-1])
-    if not all(x == 3 for x in HW) or any(x < 4 for x in self.shape[-2:]) or stride != 1 or getenv('NORMAL_CONV', 0):
+    if not all(x == 3 for x in HW) or stride != 1 or dilation != 1 or getenv('NORMAL_CONV', 0):
 
-      if True:
-        # conv2d is a pooling op (with padding)
-        x = self.pad2d(padding_)._pool(HW, stride, dilation)   # (bs, groups*cin, oy, ox, H, W)
-        rcout, oyx = cout//groups, x.shape[2:-len(HW)]
-        x = x.reshape(bs, groups, cin, 1, *oyx, *HW).expand(bs, groups, cin, rcout, *oyx, *HW).permute(0,1,3,*[4+i for i in range(len(oyx))],2,*[4+len(oyx)+i for i in range(len(HW))])
+      # conv2d is a pooling op (with padding)
+      x = self.pad2d(padding_)._pool(HW, stride, dilation)   # (bs, groups*cin, oy, ox, H, W)
+      rcout, oyx = cout//groups, x.shape[2:-len(HW)]
+      x = x.reshape(bs, groups, cin, 1, *oyx, *HW).expand(bs, groups, cin, rcout, *oyx, *HW).permute(0,1,3,*[4+i for i in range(len(oyx))],2,*[4+len(oyx)+i for i in range(len(HW))])
 
-      else:
-        # expand the channels with the pool
-        # TODO: this reduces the number of kernels, but it's slower!
-        x = self.pad2d(padding_)._pool(HW, stride, dilation, _insert_dims=(cout//groups,))   # (bs, groups*cin, rcout, oy, ox, H, W)
-        rcout, *oyx = x.shape[2:-len(HW)]
-        x = x.reshape(bs, groups, cin, rcout, *oyx, *HW).permute(0,1,3,*[4+i for i in range(len(oyx))],2,*[4+len(oyx)+i for i in range(len(HW))])
+      # expand the channels with the pool
+      # TODO: this reduces the number of kernels, but it's slower!
+      # x = self.pad2d(padding_)._pool(HW, stride, dilation, _insert_dims=(cout//groups,))   # (bs, groups*cin, rcout, oy, ox, H, W)
+      # rcout, *oyx = x.shape[2:-len(HW)]
+      # x = x.reshape(bs, groups, cin, rcout, *oyx, *HW).permute(0,1,3,*[4+i for i in range(len(oyx))],2,*[4+len(oyx)+i for i in range(len(HW))])
 
       # conv! broadcasted to (bs, groups, rcout, *oyx, cin, *HW)
       ret = (x * weight.reshape(1, groups, rcout, *[1 for _ in range(len(oyx))], cin, *HW)).sum([-1-i for i in range(1+len(oyx))], keepdim=True).reshape(bs, cout, *oyx)
     else:
       # winograd conv 3 kernel f(4x4,3x3)
-      # todo: padding edge cases
-      end_shrink = []
-      for i, dim in enumerate(self.shape[-2:]):
-        if (dim + sum(padding_[i * 2:(i + 1) * 2]) - 2) % 4 != 0:
-          to_pad = 4 - (dim + sum(padding_[i * 2:(i + 1) * 2]) - 2) % 4
-          padding_[i * 2 + 1] = padding_[i * 2 + 1] + to_pad
-          end_shrink.append(to_pad)
-        else:
-          end_shrink.append(0)
+      # todo: stride == dilation
+      wino_padding = [p for p in padding_]
+      for i, dim in enumerate(self.shape[-len(HW):]): wino_padding[i * 2 + 1] += -(dim + sum(padding_[i * 2:(i + 1) * 2]) - 2) % 4
 
-      HWI, HWO = (6, 6), (4, 4)  # F(4x4,3x3) winograd kernel granularity
-      assert len(HW) == len(HWI)  # only support 2d winograd for now
-      x = self.pad2d(padding_)._pool(HWI, HWO, dilation)  # double stride for winograd kernel granularity
-      rcout, oyxi = cout // groups, x.shape[2:-len(HWI)]
+      HWI, HWO = (6,) * len(HW), (4,) * len(HW)  # F(4x4,3x3) winograd tiles
+      x = self.pad2d(wino_padding)._pool(HWI, tuple([hwo * d for hwo, d in zip(HWO, [dilation]*len(HW) if not isinstance(dilation, (tuple, list)) else dilation)]), dilation)
+      rcout, oyx = cout // groups, x.shape[2:-len(HWI)]
 
-      # x: (bs, groups, cin, oyx4, HW4)
-      x = x.permute(*list(range(len(x.shape)-len(HW),len(x.shape))), *list(range(len(x.shape)-len(HW))))  # move HW to the front
-      x = x.contiguous_backward()
-      g = weight.reshape(1, groups, rcout, cin, *([1]*len(oyxi)), *HW)
+      # x: (bs, groups, cin, oyx, HWI)
+
+      x = x.permute(*list(range(len(x.shape)-len(HW),len(x.shape))), *list(range(len(x.shape)-len(HW)))).contiguous_backward()  # move HW to the front
+      g = weight.reshape(1, groups, rcout, cin, *([1]*len(oyx)), *HW)
       g = g.permute(*list(range(len(g.shape)-len(HW),len(g.shape))), *list(range(len(g.shape)-len(HW))))  # move HW to the front
 
-      # x: (HW4, bs, groups, cin, oyx4)
+      # x: (HWI, bs, groups, cin, oyx)
 
       # compute 6x6 g
       def compute_g(g_, dim=0):
@@ -567,7 +558,7 @@ class Tensor:
         g5 = compute_g(g_[2], dim=dim + 1)
         return Tensor.stack([g0, g1, g2, g3, g4, g5])
 
-      gfactors = compute_g(g).contiguous()  # (HW4, bs=1, groups, rcout, cin, oyx4=(1,1))
+      gfactors = compute_g(g).contiguous()  # (HWI, bs=1, groups, rcout, cin, oyx=(1,1))
 
       def compute_dfactors(d, dim=0):
         if dim == len(HW):
@@ -580,12 +571,12 @@ class Tensor:
         d5 = compute_dfactors(4 * d[1] - 5 * d[3] + d[5], dim=dim + 1)
         return Tensor.stack([d0, d1, d2, d3, d4, d5])
 
-      dfactors = compute_dfactors(x).contiguous()  # (HW4, bs, groups, cin, oyx4)
+      dfactors = compute_dfactors(x).contiguous()  # (HWI, bs, groups, cin, oyx)
 
-      dfactors = dfactors.reshape(*HWI, bs, groups, 1, cin, *oyxi).expand(*HWI, bs, groups, rcout, cin, *oyxi)
+      dfactors = dfactors.reshape(*HWI, bs, groups, 1, cin, *oyx).expand(*HWI, bs, groups, rcout, cin, *oyx)
 
       mfactors = gfactors * dfactors
-      mfactors = mfactors.sum(axis=-1-len(HW))  # sum across cin: (HW4, bs, groups, rcout, *oyx4)
+      mfactors = mfactors.sum(axis=-1-len(HW))  # sum across cin: (HWI, bs, groups, rcout, *oyx)
 
       def compute_result(m, dim=0):
         if dim == len(HW):
@@ -597,12 +588,11 @@ class Tensor:
         r3 = mm[1] - mm[2] + 8 * mm[3] - 8 * mm[4] + mm[5]
         return Tensor.stack([r0, r1, r2, r3])
 
-      ret = compute_result(mfactors)  # outputs 2x2 result from 4x4 block: (H2, W2, bs, groups, rcout, *oyx4)
+      ret = compute_result(mfactors)  # outputs 4x4 result from 6x6 block: (HWO, bs, groups, rcout, *oyx)
 
-      ret = ret.permute([*list(range(len(HW), len(ret.shape)-len(HW))), *[i+o for i in range(len(HW)) for o in [len(ret.shape)-len(HW),0]]])  # interleave oyx and HW: (bs, groups, rcout, *oy4, H2, ox4, W2)
-      ret = ret.reshape(bs, cout, *[c * HWO[i] for i, c in enumerate(oyxi)])
-      ret = ret.shrink(tuple([(0, s) for s in ret.shape[:-2]] + [(0, s - end_shrink[i]) for i, s in enumerate(ret.shape[-2:])]))
-
+      ret = ret.permute([*range(len(HW), len(ret.shape)-len(HW)), *[i+o for i in range(len(HW)) for o in [len(ret.shape)-len(HW),0]]])  # interleave oyx and HWO: (bs, groups, rcout, oy, HO, ox, WO)
+      ret = ret.reshape(bs, cout, *[c * HWO[i] for i, c in enumerate(oyx)])  # merge groups and rcout, oyx and HWO: (bs, groups, cout, *yx)
+      ret = ret.shrink(tuple((0, s) for s in [bs, cout, *[self.shape[-len(HW) + i] + padding_[i*2] + padding_[i*2+1] - 2 for i in range(len(HW))]]))  # remove extra winograd padding
 
     return (ret if bias is None else ret.add(bias.reshape(1, -1, *[1 for _ in range(len(HW))]))).contiguous().contiguous_backward()
 
