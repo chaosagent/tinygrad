@@ -39,7 +39,12 @@ class TinyJit:
     elif self.cnt == 1:
       CacheCollector.start()
       self.ret = self.fxn(*args, **kwargs)
-      self.jit_cache = CacheCollector.finish()
+      self.jit_cache = []
+      jit_variable_buffers = set(v[0] for v in input_rawbuffers.values())
+      for k,b,v in CacheCollector.finish():
+        if any(x in jit_variable_buffers for x in b):
+          self.jit_cache.append((k,b,v))
+          jit_variable_buffers.add(b[0])
       assert len(self.jit_cache) != 0, "didn't JIT anything!"
       if DEBUG >= 1: print(f"JIT captured {len(self.jit_cache)} kernels with {len(input_rawbuffers)} inputs")
 

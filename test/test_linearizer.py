@@ -19,6 +19,34 @@ class TestLinearizer(unittest.TestCase):
     np_c = (np_a[:2] - np_a[2:]) - (np_b[:2] - np_b[2:])
     np.testing.assert_allclose(np_c, c.numpy())
 
+  def test_arg_dedup_assign(self):
+    if not isinstance(Device[Device.DEFAULT], Compiled):
+      self.skipTest("Only Compiled supports cache")
+    a, b = Tensor.randn(4), Tensor.randn(4)
+    np_a, np_b = a.numpy(), b.numpy()
+    CacheCollector.start()
+    # the following should add a to b in-place in b.
+    b.assign(a + b).realize()
+    rawbufs = CacheCollector.finish()[0][1]
+    # output buffer must be first rawbuffer
+    assert len(rawbufs) == 2 and rawbufs == [b.lazydata.realized, a.lazydata.realized]
+    np_c = np_a + np_b
+    np.testing.assert_allclose(np_c, b.numpy())
+
+  def test_arg_dedup_assign2(self):
+    if not isinstance(Device[Device.DEFAULT], Compiled):
+      self.skipTest("Only Compiled supports cache")
+    a, b, c = Tensor.randn(4), Tensor.randn(4), Tensor.randn(4)
+    np_a, np_b, np_c = a.numpy(), b.numpy(), c.numpy()
+    # the following should add a to b in-place in b.
+    d = b + c
+    b.assign(a + b).realize()
+    d = d.realize()
+    np_apb = np_a + np_b
+    np_d = np_b + np_c
+    np.testing.assert_allclose(np_apb, b.numpy())
+    np.testing.assert_allclose(np_d, d.numpy())
+
   def test_load_dedup(self):
     # for different leaves in the AST, the same loads may occur.
 

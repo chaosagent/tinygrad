@@ -134,5 +134,28 @@ class TestJit(unittest.TestCase):
     assert output2 != expect2
     assert len(f.jit_cache) == 1
 
+  def test_jit_only_rerun_changed_inputs(self):
+    @TinyJit
+    def f(a):
+      b = Tensor([1, 1, 1, 1])
+      c = Tensor([2, 2, 2, 2])
+      return (a + b + c).realize()
+    a = Tensor([3, 3, 3, 3])
+    for i in range(5):
+      np.testing.assert_allclose(f(a).numpy(), np.array([6, 6, 6, 6]), atol=1e-4, rtol=1e-5)
+    assert len(f.jit_cache) == 1
+
+  def test_jit_only_rerun_changed_inputs_assign(self):
+    @TinyJit
+    def f(a):
+      b = Tensor([1, 1, 1, 1]).realize()
+      b.assign(b + a).realize()  # overwrite the b buffer. the JIT now has to recalculate it.
+      return (a + b).realize()
+
+    a = Tensor([3, 3, 3, 3])
+    for i in range(5):
+      np.testing.assert_allclose(f(a).numpy(), np.array([7, 7, 7, 7]), atol=1e-4, rtol=1e-5)
+
+
 if __name__ == '__main__':
   unittest.main()
