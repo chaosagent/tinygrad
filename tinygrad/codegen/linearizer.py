@@ -727,13 +727,14 @@ class Linearizer:
     min_preferred_local_dim = unwrap_optional(self.target_dev.device_info.threads_executed_in_parallel, 32)
 
     # are we grouping? (requires local shape support)
-    if not self.float4_axis(0) and self.first_reduce <= 2 and self.first_reduce + 1 <= self.shape_len and prod(self.sts[0].shape[:self.first_reduce]) <= 2048:
+    if not self.float4_axis(0) and self.reduceop is not None and (prod(self.sts[0].shape[:self.first_reduce]) <= 2048 or True):
+      print('GROUPING', self.full_shape, self.first_reduce)
       # TODO: use 1024 if it's allowed in a smarter way
       # Choose local shape to be as big as possible but not making global dim too small at the same time.
       preferred_sz = min(512, round_to_power2(max(prod(self.full_shape[self.first_reduce:]) // (min_preferred_global_dim * 8), min_preferred_local_dim)))
       for sz in [preferred_sz, 16]:
         if all(st.shape[self.first_reduce] % sz == 0 or st.shape[self.first_reduce] == 1 for st in self.sts):
-          self.shift_to(self.first_reduce, sz, top=True, insert_before=self.first_reduce + len(self.group_for_reduce))
+          self.shift_to(self.first_reduce, sz, top=False, insert_before=self.first_reduce + len(self.group_for_reduce))
           self.group_for_reduce.append(sz)
           break
 
