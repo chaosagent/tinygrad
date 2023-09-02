@@ -1,5 +1,6 @@
 import random
 import functools
+from os import getenv
 from pathlib import Path
 import requests
 import numpy as np
@@ -9,6 +10,7 @@ import torch
 import torch.nn.functional as F
 from tinygrad.tensor import Tensor
 import multiprocessing as mp
+import threading
 import itertools
 from examples.mlperf.metrics import one_hot
 
@@ -159,12 +161,22 @@ def produce(it, sema):
 from tqdm import tqdm
 def iterate(BS=1, val=True, shuffle=False, roi_shape=(128,128,128), num_workers=12, epochs=1, prewarm=False, dtype=np.float32):
   files = get_val_files() if val else get_train_files()
-  if shuffle: random.shuffle(files)
+  if getenv("TESTING", ""): files = files[:BS]
+  real_epoch_size = len(files) // BS * BS
   with mp.Pool(num_workers) as p:
-    sema = mp.Semaphore(num_workers * 4)
-    for i, (X, Y, key) in enumerate(tqdm(p.imap(functools.partial(preprocess if val or prewarm else augment, roi_shape=roi_shape, dtype=dtype), produce(itertools.islice(itertools.cycle(files), epochs * len(files)), sema)), position=1, total=epochs * len(files))):
-      sema.release()
-      yield i, np.expand_dims(X, axis=0), Y, key
+    sema = threading.Semaphore(num_workers * 4)  # this semaphore is just to control the number of jobs put on the mp queue, will not be passed to child processes
+    it = tqdm(p.imap(functools.partial(preprocess if val or prewarm else augment, roi_shape=roi_shape, dtype=dtype),
+                               produce(itertools.islice(itertools.chain(*((random.sample(files, k=len(files)) if shuffle else files)[:real_epoch_size] for _ in range(epochs))), epochs * real_epoch_size), sema)), position=1, total=epochs * real_epoch_size)
+    i = 0
+    while True:
+      batch = list(itertools.islice(it, BS))
+      if not batch: break
+      for _ in range(len(batch)): sema.release()
+      X, Y, keys = zip(*batch)
+      X = np.stack(X)  # second dim is for classes
+      Y = np.concatenate(Y)
+      yield i, X, Y, keys
+      i += 1
 
 def preprocess_all(val=True, roi_shape=(128, 128, 128), num_workers=12):
   preprocessed = [(X, Y) for X, Y in iterate(val=val, roi_shape=roi_shape, num_workers=num_workers)]

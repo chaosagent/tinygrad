@@ -68,7 +68,8 @@ def kernel_optimize(k:Linearizer, create_k:Callable[[], Linearizer], to_prg):
       k.hand_coded_optimizations()
       prg = to_prg(k)
       return min([prg.exec(k.bufs, force_wait=True, optimizing=True) for _ in range(5)])*1000
-    choice = kernel_optimize_search(k, create_k, to_prg, get_baseline())
+    baseline = get_baseline()
+    choice = kernel_optimize_search(k, create_k, to_prg, baseline) if baseline > 0.5 else "BASELINE"
     if global_db is not None:
       global_db[skey] = choice
       global_db.sync()
