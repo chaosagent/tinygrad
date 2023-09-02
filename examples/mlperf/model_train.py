@@ -1,4 +1,5 @@
 import itertools
+import time
 from tqdm import tqdm
 from tinygrad.helpers import getenv, dtypes
 from tinygrad.jit import TinyJit
@@ -6,6 +7,7 @@ from tinygrad.nn import optim
 from tinygrad.nn.state import get_parameters
 from tinygrad.tensor import Tensor
 from tinygrad.helpers import getenv
+from tinygrad.ops import GlobalCounters
 
 def train_resnet():
   # TODO: Resnet50-v1.5
@@ -30,8 +32,9 @@ def train_unet3d(target=0.908, roi_shape=(128, 128, 128)):
   import numpy as np
 
   Tensor.training = True
-  dtype = "float32"
-  Tensor.default_type = dtypes.float
+  dtype = "float16"
+  np_dtype = np.float16
+  Tensor.default_type = dtypes.half
   in_channels, n_class, BS = 1, 3, 1, # original: 1, 3, 2
   mdl = UNet3D(in_channels, n_class)
   #mdl.load_from_pretrained(dtype=dtype)
@@ -50,29 +53,37 @@ def train_unet3d(target=0.908, roi_shape=(128, 128, 128)):
     opt.step()
     return loss.realize(), out.realize()
 
-  for image, label, key in iterate(BS=BS, val=False, prewarm=True, roi_shape=roi_shape, epochs=1):
+  for _, image, label, key in iterate(BS=BS, val=False, prewarm=True, roi_shape=roi_shape, epochs=1, dtype=np_dtype):
     preprocess_cache[key] = (np.squeeze(image, axis=0), label, key)
-  for image, label, key in iterate(BS=BS, val=True, prewarm=True, epochs=1):
+  for _, image, label, key in iterate(BS=BS, val=True, prewarm=True, epochs=1, dtype=np_dtype):
     preprocess_cache[key] = (np.squeeze(image, axis=0), label, key)
 
   print('cache warmed')
 
-  data_loader = iterate(BS=BS, val=False, roi_shape=roi_shape, epochs=max_epochs)
-  val_data_loader = iterate(BS=BS, val=True, epochs=max_epochs // evaluate_every_epochs)
+  data_loader = iterate(BS=BS, val=False, roi_shape=roi_shape, epochs=max_epochs, dtype=np_dtype)
+  val_data_loader = iterate(BS=BS, val=True, epochs=max_epochs // evaluate_every_epochs, dtype=np_dtype)
   for epoch in range(max_epochs):
     if epoch <= lr_warmup_epochs and lr_warmup_epochs > 0:
       lr_warmup(opt, init_lr, lr, epoch, lr_warmup_epochs)
     if True:
-      for image, label, _ in (t := tqdm(itertools.islice(data_loader, len(get_train_files())//BS), total=len(get_train_files())//BS)):
-        image = Tensor(image.astype(dtype))
-        label = Tensor(one_hot(label, n_class))
+      st = time.monotonic()
+      for i, image, label, _ in (t := tqdm(itertools.islice(data_loader, len(get_train_files())//BS), total=len(get_train_files())//BS)):
+        GlobalCounters.reset()
+        image = Tensor(image)
+        label = Tensor(label)
         loss, _ = train_step(image, label)
+        et = time.monotonic()
         del image, label
-        t.set_description(f"loss {loss.numpy().item()}")
+        loss_cpu = loss.numpy().item()
+        cl = time.monotonic()
+        t.set_description(f"loss {loss_cpu}")
+        tqdm.write(f"{i:3d} {(cl - st) * 1000.0:7.2f} ms run, {(et - st) * 1000.0:7.2f} ms python, {(cl - et) * 1000.0:7.2f} ms CL, {loss_cpu:7.2f} loss, {opt.lr.numpy()[0]:.6f} LR, {GlobalCounters.mem_used / 1e9:.2f} GB used, {GlobalCounters.global_ops * 1e-9 / (cl - st):9.2f} GFLOPS")
+        st = time.monotonic()
+
     if (epoch + 1) % evaluate_every_epochs == 0 or False:
       Tensor.training = False
-      inference_results = [sliding_window_inference(mdl, image, label) for image, label, _ in tqdm(itertools.islice(val_data_loader, len(get_val_files())//BS), total=len(get_val_files())//BS)]
-      with mp.Pool(32) as p:
+      inference_results = [sliding_window_inference(mdl, image, label) for _, image, label, _ in tqdm(itertools.islice(val_data_loader, len(get_val_files())//BS), total=len(get_val_files())//BS)]
+      with mp.Pool(12) as p:
         s = sum(tqdm(p.imap(dice_score, inference_results), total=len(inference_results)))
       val_dice_score = s / len(get_val_files())
       print(f"[Epoch {epoch}] Val dice score: {val_dice_score:.4f}. Target: {target}")
