@@ -3,6 +3,8 @@ import string
 from collections import Counter
 import numpy as np
 
+from tinygrad.tensor import Tensor
+
 def levenshtein(a, b):
   n, m = len(a), len(b)
   if n > m:
@@ -35,7 +37,7 @@ def one_hot(arr, num_classes=3):
   arr = arr.transpose((0, 4, 1, 2, 3)).astype(np.float32)
   return arr
 
-def get_dice_score(prediction, target, channel_axis=1, smooth_nr=1e-6, smooth_dr=1e-6):
+def get_dice_score_cpu(prediction, target, channel_axis=1, smooth_nr=1e-6, smooth_dr=1e-6):
   channel_axis, reduce_axis = 1, tuple(range(2, len(prediction.shape)))
   prediction = prediction.argmax(axis=channel_axis)
   prediction, target= one_hot(prediction)[:, 1:], one_hot(target)[:, 1:]
@@ -44,6 +46,29 @@ def get_dice_score(prediction, target, channel_axis=1, smooth_nr=1e-6, smooth_dr
   prediction_sum = np.sum(prediction, axis=reduce_axis)
   result = (2.0 * intersection + smooth_nr) / (target_sum + prediction_sum + smooth_dr)
   return result[0]
+
+def one_hot_(arr, num_classes=3):
+  res = Tensor.eye(num_classes, requires_grad=False)[arr.reshape(-1)]
+  return res.reshape(arr.shape + (num_classes,)).permute([0, 4, 1, 2, 3]).float()# we cant compute the dice_score with float16 because of overflows
+
+def get_dice_score(prediction, target, channel_axis=1, smooth_nr=1e-6, smooth_dr=1e-6):
+  if not isinstance(prediction, Tensor):
+    prediction = Tensor(prediction)
+  reduce_axis = list(range(2, len(prediction.shape)))
+  prediction = prediction.softmax(channel_axis)
+  assert target.shape == prediction.shape, f"Target and prediction shape do not match. Target: ({target.shape}), prediction: ({prediction.shape})."
+  intersection = (target * prediction).sum(axis=reduce_axis)
+  target_sum = target.sum(axis=reduce_axis)
+  prediction_sum = prediction.sum(axis=reduce_axis)
+  return (2.0 * intersection + smooth_nr) / (target_sum + prediction_sum + smooth_dr)
+
+# y_true must be one-hot tensor
+def dice_ce_loss(y_pred, y_true, n_classes):
+  cross_entropy = -y_true.mul(y_pred.softmax(1).clip(1e-8, 1).log()).mean()
+  dice_score = get_dice_score(y_pred, y_true)
+  dice_loss = (Tensor.ones_like(dice_score) - dice_score).mean()
+  loss = (dice_loss + cross_entropy) / 2
+  return loss
 
 def normalize_string(s):
   s = "".join(c for c in s.lower() if c not in string.punctuation)
