@@ -156,16 +156,16 @@ def produce(it, sema):
     yield x
 
 from tqdm import tqdm
-def iterate(BS=1, val=True, shuffle=False, roi_shape=(128,128,128), num_workers=32, epochs=1, prewarm=False):
+def iterate(BS=1, val=True, shuffle=False, roi_shape=(128,128,128), num_workers=12, epochs=1, prewarm=False):
   files = get_val_files() if val else get_train_files()
   if shuffle: random.shuffle(files)
   with mp.Pool(num_workers) as p:
-    sema = mp.Semaphore(1024)
+    sema = mp.Semaphore(num_workers * 4)
     for i, (X, Y, key) in enumerate(tqdm(p.imap(functools.partial(preprocess if val or prewarm else augment, roi_shape=roi_shape), produce(itertools.islice(itertools.cycle(files), epochs * len(files)), sema)), position=1, total=epochs * len(files))):
       sema.release()
       yield np.expand_dims(X, axis=0), Y, key
 
-def preprocess_all(val=True, roi_shape=(128, 128, 128), num_workers=32):
+def preprocess_all(val=True, roi_shape=(128, 128, 128), num_workers=12):
   preprocessed = [(X, Y) for X, Y in iterate(val=val, roi_shape=roi_shape, num_workers=num_workers)]
   return preprocessed
 

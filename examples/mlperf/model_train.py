@@ -20,7 +20,7 @@ from examples.mlperf.metrics import get_dice_score_cpu
 def dice_score(pl):
   return get_dice_score_cpu(pl[0], pl[1]).mean()
 
-def train_unet3d(target=0.908, roi_shape=(64, 64, 64)):
+def train_unet3d(target=0.908, roi_shape=(128, 128, 128)):
   import multiprocessing as mp
   from examples.mlperf.metrics import dice_ce_loss, get_dice_score, one_hot, get_dice_score_cpu
   from extra.datasets.kits19 import (get_train_files, get_val_files, iterate,
@@ -29,10 +29,9 @@ def train_unet3d(target=0.908, roi_shape=(64, 64, 64)):
   from models.unet3d import UNet3D
   import numpy as np
 
-  dtype = "float32"
-
   Tensor.training = True
-  Tensor.default_type = dtypes.float32
+  dtype = "float32"
+  Tensor.default_type = dtypes.float
   in_channels, n_class, BS = 1, 3, 1, # original: 1, 3, 2
   mdl = UNet3D(in_channels, n_class)
   #mdl.load_from_pretrained(dtype=dtype)
@@ -45,7 +44,7 @@ def train_unet3d(target=0.908, roi_shape=(64, 64, 64)):
   @TinyJit
   def train_step(image, label):
     opt.zero_grad()
-    out = mdl(image)
+    out = mdl(image).float()
     loss = dice_ce_loss(out, label, n_class)
     loss.backward()
     opt.step()
