@@ -27,8 +27,8 @@ def fetch_cifar(shuffle=False):
       order = list(range(0, len(y)))
       if shuffle: random.shuffle(order)
       if X is None:
-        X = Tensor.empty(sz, *x.shape[1:], device=f'disk:/tmp/{path}'+'_x', dtype=dtypes.uint8)
-        Y = Tensor.empty(sz, *y.shape[1:], device=f'disk:/tmp/{path}'+'_y', dtype=dtypes.int64)
+        X = Tensor.empty(sz, *x.shape[1:], device=f'disk:./{path}'+'_x', dtype=dtypes.uint8)
+        Y = Tensor.empty(sz, *y.shape[1:], device=f'disk:./{path}'+'_y', dtype=dtypes.int64)
       X[idx:idx+bs].assign(x[order,:])
       Y[idx:idx+bs].assign(y[order])
       idx += bs

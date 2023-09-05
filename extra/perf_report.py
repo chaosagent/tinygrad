@@ -103,7 +103,7 @@ class PerfReport:
 
   @staticmethod
   def show_row(name, et_tinygrad, flops, mem, baseline=None, baseline_flops=None, baseline_mem=None, baseline_name="torch"):
-    print(("\r" if not CI else "") + f"{name:42s} "
+    print(("\r" if not CI else "") + f"{name:60s} "
                                      + (f"{baseline:7.2f} ms ({(baseline_flops or flops) / baseline:8.2f} GFLOPS {(baseline_mem or mem) / baseline:8.2f} GB/s) in {baseline_name}, " if baseline is not None else " " * (48 + len(baseline_name))) +
                                      f"{et_tinygrad:7.2f} ms ({flops / et_tinygrad:8.2f} GFLOPS {mem / et_tinygrad:8.2f} GB/s) in tinygrad, "
                                      + (f"{colorize_float(et_tinygrad / baseline)} {'faster' if baseline > et_tinygrad else 'slower'} " if baseline is not None else " " * 16) +

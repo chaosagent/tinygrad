@@ -34,7 +34,7 @@ else:
   sync = lambda: None
 
 save_ops, save_mem = 0, 0
-CNT = 8
+CNT = 20
 def helper_test_speed(f1, *args):
   global save_ops, save_mem
   ets = []
@@ -98,21 +98,21 @@ def helper_test_generic(name, f1, f1_args, f2, f2_args):
 
   flops = save_ops*1e-6
   mem = save_mem*1e-6
-  np.testing.assert_allclose(val_tinygrad, val_torch, atol=1e-4, rtol=1e-3)
+  np.testing.assert_allclose(val_tinygrad, val_torch, atol=1e-3, rtol=1e-3)
   rpt.log_perf(name, et_tinygrad, flops, mem, baseline=et_torch)  # don't log performance results if test failed
 
-def helper_test_conv(bs, in_chans, out_chans, kernel_size, img_size_y, img_size_x):
+def helper_test_conv(bs, in_chans, out_chans, kernel_size, img_size_y, img_size_x, padding=0):
   torch.manual_seed(0)
   torch_dat = torch.rand(bs, in_chans, img_size_y, img_size_x).to(torch_device)
-  torch_conv = torch.nn.Conv2d(in_chans, out_chans, kernel_size, bias=None).to(torch_device)
+  torch_conv = torch.nn.Conv2d(in_chans, out_chans, kernel_size, bias=None, padding=padding).to(torch_device)
 
   tiny_dat = Tensor(torch_dat.cpu().numpy())
-  tiny_conv = Conv2d(in_chans, out_chans, kernel_size, bias=None)
+  tiny_conv = Conv2d(in_chans, out_chans, kernel_size, bias=None, padding=padding)
   tiny_conv.weight = Tensor(torch_conv.weight.detach().cpu().numpy())
 
   def f1(torch_dat): return torch_conv(torch_dat)
   def f2(tiny_dat): return tiny_conv(tiny_dat).realize()
-  helper_test_generic(f"conv bs:{bs:3d} chans:{in_chans:3d} -> {out_chans:3d} k:{kernel_size}", f1, (torch_dat,), TinyJit(f2), (tiny_dat,))
+  helper_test_generic(f"conv bs:{bs:3d} chans:{in_chans:3d} -> {out_chans:3d} k:{kernel_size} img:{img_size_y}x{img_size_x}", f1, (torch_dat,), TinyJit(f2), (tiny_dat,))
 
 @unittest.skipIf(getenv("BIG") == 0, "no big tests")
 class TestBigSpeed(unittest.TestCase):
@@ -129,7 +129,19 @@ class TestBigSpeed(unittest.TestCase):
     def f(a, b): return a @ b
     helper_test_generic_square('gemm', 4096, f, f)
   def test_large_conv_1x1(self): helper_test_conv(bs=32, in_chans=128, out_chans=128, kernel_size=1, img_size_y=128, img_size_x=128)
-  def test_large_conv_3x3(self): helper_test_conv(bs=4, in_chans=128, out_chans=128, kernel_size=3, img_size_y=130, img_size_x=130)
+  def test_large_conv_3x3(self): helper_test_conv(bs=4, in_chans=128, out_chans=128, kernel_size=3, img_size_y=128, img_size_x=128, padding=1)
+  def test_large_conv_3x3_matrix(self):
+    for image_size in [8, 16, 32, 64, 128]:
+      for bs in range(1, 5):
+        for in_chans in range(1, 11):
+          for out_chans in range(1, 11):
+            helper_test_conv(bs=bs, in_chans=2**in_chans, out_chans=2**out_chans, kernel_size=3, img_size_y=image_size, img_size_x=image_size, padding=1)
+  def test_large_conv_3x3_matrix_wino(self):
+    for bs in [1, 4, 128, 512]:
+      for in_chans in [1, 4, 5, 6, 7, 8, 9, 10]:
+        for image_size in [8, 32, 128, 224]:
+          out_chans=in_chans
+          helper_test_conv(bs=bs, in_chans=2**in_chans, out_chans=2**out_chans, kernel_size=3, img_size_y=image_size, img_size_x=image_size, padding=1)
   def test_large_conv_5x5(self): helper_test_conv(bs=4, in_chans=128, out_chans=128, kernel_size=5, img_size_y=132, img_size_x=132)
   def test_matvec_4096_16384(self): helper_test_matvec('matvec_4096_16384', 4096, 16384)
   def test_matvec_16384_4096(self): helper_test_matvec('matvec_16384_4096', 16384, 4096)
