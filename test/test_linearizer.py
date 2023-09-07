@@ -90,12 +90,12 @@ class TestLinearizer(unittest.TestCase):
   def test_winograd_upcast(self):
     Tensor.wino = True
 
-    a = Tensor.randn((1, 1, 4, 4))
-    b = Tensor.randn((1, 1, 3, 3))
+    a = Tensor.randn(1, 1, 4, 4).realize()
+    b = Tensor.randn(1, 1, 3, 3).realize()
     GlobalCounters.linearizers = []
     a.conv2d(b).realize()
 
-    assert GlobalCounters.kernel_count >= 3, "winograd was not used, maybe this test is out of date?"
+    assert len(GlobalCounters.linearizers) >= 3, "winograd was not used, maybe this test is out of date?"
     assert all(len(uop.vin) == 2 for k in GlobalCounters.linearizers for uop in k.uops if uop.uop == UOps.LOAD), "valids not optimized out in winograd"
 
     GlobalCounters.linearizers = None
