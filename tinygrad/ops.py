@@ -172,6 +172,7 @@ class Compiled:
 
   def to_program(self, k):
     k.linearize()
+    if GlobalCounters.linearizers is not None: GlobalCounters.linearizers.append(k)
     src = self.renderer(k.function_name, k.uops)
     return ASTRunner(k.function_name, src, k.global_size, k.local_size,
                      op_estimate=k.info.flops, mem_estimate=k.mem_estimate,

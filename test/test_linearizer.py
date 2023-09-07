@@ -2,6 +2,7 @@ import numpy as np
 import unittest
 
 from tinygrad.codegen.linearizer import Linearizer, UOps
+from tinygrad.helpers import GlobalCounters
 from tinygrad.ops import Compiled, Device
 from tinygrad.tensor import Tensor
 from tinygrad.jit import CacheCollector
@@ -84,6 +85,21 @@ class TestLinearizer(unittest.TestCase):
     k.linearize()
     num_ops = len([uop for uop in k.uops if uop.uop in [UOps.LOAD, UOps.ALU]])
     assert num_ops <= 0, "more load or alu uops than needed"
+
+  # winograd conv should have transformations folded/unrolled/upcasted into the function body
+  def test_winograd_upcast(self):
+    Tensor.wino = True
+
+    a = Tensor.randn((1, 1, 4, 4))
+    b = Tensor.randn((1, 1, 3, 3))
+    GlobalCounters.linearizers = []
+    a.conv2d(b).realize()
+
+    assert GlobalCounters.kernel_count >= 3, "winograd was not used, maybe this test is out of date?"
+    assert all(len(uop.vin) == 2 for k in GlobalCounters.linearizers for uop in k.uops if uop.uop == UOps.LOAD), "valids not optimized out in winograd"
+
+    GlobalCounters.linearizers = None
+    Tensor.wino = False
 
 if __name__ == '__main__':
   unittest.main()
