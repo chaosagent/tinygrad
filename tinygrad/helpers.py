@@ -1,8 +1,9 @@
 from __future__ import annotations
-import os, functools, platform, time, re, contextlib
+import os, functools, platform, time, re, contextlib, atexit
 import numpy as np
 from typing import Dict, Tuple, Union, List, NamedTuple, Final, Iterator, ClassVar, Optional, Iterable, Any
 from math import prod # noqa: F401 # pylint:disable=unused-import
+from inspect import getframeinfo, stack
 
 # NOTE: helpers is not allowed to import from anything else in tinygrad
 OSX = platform.system() == "Darwin"
@@ -29,6 +30,21 @@ def partition(lst, fxn):
 
 @functools.lru_cache(maxsize=None)
 def getenv(key, default=0): return type(default)(os.getenv(key, default))
+
+class CacheWithStats(dict):
+  def __init__(self, *args, **kwargs):
+    self.hits = 0
+    self.queries = 0
+    self.caller = getframeinfo(stack()[1][0])
+    atexit.register(self.print_stats)
+    super().__init__(*args, **kwargs)
+  def __contains__(self, *args, **kwargs):
+    ret = super().__contains__(*args, **kwargs)
+    self.queries += 1
+    if ret: self.hits += 1
+    return ret
+  def print_stats(self):
+    print(f"CacheWithStats @ {self.caller.filename}:{self.caller.lineno}: {self.hits}/{self.queries} - {self.hits/self.queries*100}%")
 
 class Context(contextlib.ContextDecorator):
   stack: ClassVar[List[dict[str, int]]] = [{}]

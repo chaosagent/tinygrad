@@ -4,7 +4,7 @@ import itertools, math, functools
 from collections import defaultdict
 from enum import Enum, auto
 
-from tinygrad.helpers import colored, ImageDType, DEBUG, dtypes, DType, partition, prod, PtrDType, all_same
+from tinygrad.helpers import colored, ImageDType, DEBUG, dtypes, DType, partition, prod, PtrDType, all_same, CacheWithStats
 from tinygrad.ops import LazyOp, UnaryOps
 from tinygrad.ops import ReduceOps, BinaryOps, TernaryOps
 from tinygrad.runtime.lib import RawConst
@@ -85,6 +85,9 @@ class Linearizer(OptimizedKernel):
     SumNode: lambda self,ops,ctx: functools.reduce(lambda a,b: ctx.uop_alu_idx(a, b, ops, ctx, BinaryOps.ADD), self.nodes[1:], self.nodes[0].render(ops,ctx)),
     AndNode: lambda self,ops,ctx: functools.reduce(lambda a,b: ctx.uop_alu_idx(a, b, ops, ctx, BinaryOps.MUL, dtype=dtypes.bool), self.nodes[1:], self.nodes[0].render(ops,ctx)) }
 
+  sub_cache = CacheWithStats()
+  sub_cache_v = CacheWithStats()
+
   def global_load(self, i:int, idxs:Sequence[VariableOrNum], acc=None) -> List[UOp]:
     const = self.bufs[i].realized._buf if isinstance(self.bufs[i].realized, RawConst) else acc
 
@@ -95,14 +98,21 @@ class Linearizer(OptimizedKernel):
     amt = 1
     if len(upcast_dim) == 1 and len(expanded_nodes[upcast_dim[0]]) in [4,2]:
       dim, amt = upcast_dim[0], len(expanded_nodes[upcast_dim[0]])
+    else:
+      dim = None
 
     # calculate expr_idxs using placeholder variables
     fake_idxs = [idx if isinstance(idx, NumNode) else Variable(f"_uidx{i}", idx.min, idx.max) for i, idx in enumerate(idxs)]
     g_idx, g_valid = self.sts[i].expr_idxs(fake_idxs)
+    g_idx_vars = set(v.expr for v in g_idx.vars())
+    g_valid_vars = set(v.expr for v in g_valid.vars())
+    #print(g_idx, g_valid, idxs)
 
-    ret = []
-    invalid_value = 0 if dtypes.is_int(self.bufs[i].dtype) else 0.0
-    for _idx in _idxs:
+    idx_key = (g_idx, tuple(idx if isinstance(idx, NumNode) or fidx.expr in g_idx_vars or None in [v.expr for v in idx.vars()] else None for fidx, idx in zip(fake_idxs, idxs)), dim, amt)
+    valid_key = (g_valid, tuple(idx if isinstance(idx, NumNode) or fidx.expr in g_valid_vars or None in [v.expr for v in idx.vars()] else None for fidx, idx in zip(fake_idxs, idxs)), dim, amt)
+    c_idxs, c_valids = Linearizer.sub_cache.get(idx_key, None), Linearizer.sub_cache_v.get(valid_key, None)
+    u_idxs, u_valids, localtypes = [], [], []
+    for j, _idx in enumerate(_idxs):
       substitute: Dict[VariableOrNum, Node] = dict(zip(fake_idxs, _idx))
       if amt > 1:
         float4_substitute = {**substitute, fake_idxs[dim]: expanded_nodes[dim][0]}
@@ -112,8 +122,20 @@ class Linearizer(OptimizedKernel):
           idx, valid = g_idx.substitute(substitute), g_valid.substitute(substitute)
           localtype = dtypes.float32
       else:
-        idx, valid = g_idx.substitute(substitute), g_valid.substitute(substitute)
+        idx = g_idx.substitute(substitute) if c_idxs is None else c_idxs[j]
+        valid = g_valid.substitute(substitute) if c_valids is None else c_valids[j]
         localtype = dtypes.float32
+      u_idxs.append(idx)
+      u_valids.append(valid)
+      localtypes.append(localtype)
+    if idx_key not in Linearizer.sub_cache: Linearizer.sub_cache[idx_key] = u_idxs
+    if valid_key not in Linearizer.sub_cache_v:
+      Linearizer.sub_cache_v[valid_key] = u_valids
+    loads_to_do = zip(u_idxs, u_valids, localtypes)
+
+    ret = []
+    invalid_value = 0 if dtypes.is_int(self.bufs[i].dtype) else 0.0
+    for idx, valid, localtype in loads_to_do:
       this_const, idx, valid = (invalid_value, Variable.num(0), Variable.num(1)) if valid.max == 0 else (const, idx, valid)
       key = f"{acc}{localtype}{this_const if this_const is not None and acc is None else self.get_buffer_name(i)}{idx.render()}{valid.render()}"
       if key not in self.load_cache:
