@@ -108,7 +108,7 @@ class Linearizer(OptimizedKernel):
     invalid_value = 0 if dtypes.is_int(self.bufs[i].dtype) else 0.0
     for idx, valid, rep_idx in zip(e_idxs, e_valids, Node.iter_idxs([eidx[0] if (eidx:=idx.expand_idxs()) else NumNode(0) for idx in idxs])):
       this_const, idx, valid = (invalid_value, Variable.num(0), Variable.num(1)) if valid.max == 0 else (const, idx, valid)
-      key = f"{acc}{localtype}{this_const if this_const is not None and acc is None else self.get_buffer_name(i)}{idx.render()}{valid.render()}"
+      key = (acc, localtype, this_const if this_const is not None and acc is None else self.get_buffer_name(i), idx.render(), valid.render())
       if key not in self.load_cache:
         if acc is not None:
           assert valid.min == 1

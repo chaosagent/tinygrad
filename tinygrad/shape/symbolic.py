@@ -116,6 +116,7 @@ class Node:
     return create_node(ModNode(self, b))
 
   @staticmethod
+  @functools.lru_cache(maxsize=None)
   def num(num:int) -> NumNode: return NumNode(num)
 
   @staticmethod
