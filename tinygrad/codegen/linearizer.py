@@ -87,14 +87,11 @@ class Linearizer(OptimizedKernel):
   def global_load(self, i:int, idxs:Sequence[Node], acc=None) -> List[UOp]:
     const = self.bufs[i].realized._buf if isinstance(self.bufs[i].realized, RawConst) else acc
 
-    def rename_var(v: VariableOrNum, expr: str): return v if isinstance(v, NumNode) else Variable(expr, v.min, v.max)
-
     amt, dim = 1, None
     upcast_dim = self.get_upcast_dim(i)
     if len(upcast_dim) == 1 and len(float4_expand := idxs[upcast_dim[0]].expand()) in [4,2]:
       dim, amt = upcast_dim[0], len(float4_expand)
 
-    expand_vars = tuple([idx.expand_idx() for j, idx in enumerate(idxs) if isinstance(idx.expand_idx(), Variable)])
     if dim is not None:
       g_idx, g_valid = self.sts[i].expr_idxs([*idxs[:dim], float4_expand[0], *idxs[dim+1:]])
       if (g_idx // amt * amt).render() != g_idx.render():
@@ -103,11 +100,13 @@ class Linearizer(OptimizedKernel):
       g_idx, g_valid = self.sts[i].expr_idxs(idxs)
     localtype = dtypes.float32 if amt == 1 else dtypes._float4 if amt == 4 else dtypes._float2
 
+    # no expand vars should be shared between idxs
+    expand_vars = sum(idx.expand_idxs() for idx in idxs)
     e_idxs, e_valids = g_idx.expand(expand_vars), g_valid.expand(expand_vars)
 
     ret = []
     invalid_value = 0 if dtypes.is_int(self.bufs[i].dtype) else 0.0
-    for idx, valid, rep_idx in zip(e_idxs, e_valids, Node.iter_idxs([idx.expand_idx() for idx in idxs])):
+    for idx, valid, rep_idx in zip(e_idxs, e_valids, Node.iter_idxs([eidx[0] if (eidx:=idx.expand_idxs()) else NumNode(0) for idx in idxs])):
       this_const, idx, valid = (invalid_value, Variable.num(0), Variable.num(1)) if valid.max == 0 else (const, idx, valid)
       key = f"{acc}{localtype}{this_const if this_const is not None and acc is None else self.get_buffer_name(i)}{idx.render()}{valid.render()}"
       if key not in self.load_cache:
