@@ -390,12 +390,12 @@ class TestSymbolicSymbolicOps(unittest.TestCase):
     a = Variable("a", 5, 7)
     assert a.expand() == [a]
 
-  def test_variable_expand_expr_none(self):
-    a = Variable(None, 5, 7)
+  def test_variable_expand_mark(self):
+    a = Variable("a", 5, 7, expand=True)
     assert a.expand() == [NumNode(5), NumNode(6), NumNode(7)]
 
   def test_mul_node_expand(self):
-    a = Variable(None, 5, 7)
+    a = Variable("a", 5, 7, expand=True)
     m = MulNode(a, 3)
     assert m.expand() == [NumNode(15), NumNode(18), NumNode(21)]
 
@@ -404,7 +404,7 @@ class TestSymbolicSymbolicOps(unittest.TestCase):
     assert n.expand() == [Variable("b", 1, 3)*3]
 
   def test_sum_node_expand(self):
-    a = Variable(None, 1, 3)
+    a = Variable("a", 1, 3, expand=True)
     b = Variable("b", 5, 7)
 
     s1 = create_rednode(SumNode, [a, b])

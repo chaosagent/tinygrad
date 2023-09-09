@@ -94,21 +94,20 @@ class Linearizer(OptimizedKernel):
     if len(upcast_dim) == 1 and len(float4_expand := idxs[upcast_dim[0]].expand()) in [4,2]:
       dim, amt = upcast_dim[0], len(float4_expand)
 
-    expand_vars = tuple([rename_var(idx.expand_idx(), f"_uidx{j}") for j, idx in enumerate(idxs)])
-    fake_idxs = [idx.substitute({idx.expand_idx(): ev}) for idx, ev in zip(idxs, expand_vars)]
+    expand_vars = tuple([idx.expand_idx() for j, idx in enumerate(idxs) if isinstance(idx.expand_idx(), Variable)])
     if dim is not None:
-      g_idx, g_valid = self.sts[i].expr_idxs(fake_idxs[:dim] + [float4_expand[0]] + fake_idxs[dim+1:])
+      g_idx, g_valid = self.sts[i].expr_idxs([*idxs[:dim], float4_expand[0], *idxs[dim+1:]])
       if (g_idx // amt * amt).render() != g_idx.render():
-        (g_idx, g_valid), amt, dim = self.sts[i].expr_idxs(fake_idxs), 1, None
+        (g_idx, g_valid), amt, dim = self.sts[i].expr_idxs(idxs), 1, None
     else:
-      g_idx, g_valid = self.sts[i].expr_idxs(fake_idxs)
+      g_idx, g_valid = self.sts[i].expr_idxs(idxs)
     localtype = dtypes.float32 if amt == 1 else dtypes._float4 if amt == 4 else dtypes._float2
 
     e_idxs, e_valids = g_idx.expand(expand_vars), g_valid.expand(expand_vars)
 
     ret = []
     invalid_value = 0 if dtypes.is_int(self.bufs[i].dtype) else 0.0
-    for idx, valid, rep_idx in zip(e_idxs, e_valids, Node.iter_idxs(expand_vars)):
+    for idx, valid, rep_idx in zip(e_idxs, e_valids, Node.iter_idxs([idx.expand_idx() for idx in idxs])):
       this_const, idx, valid = (invalid_value, Variable.num(0), Variable.num(1)) if valid.max == 0 else (const, idx, valid)
       key = f"{acc}{localtype}{this_const if this_const is not None and acc is None else self.get_buffer_name(i)}{idx.render()}{valid.render()}"
       if key not in self.load_cache:
@@ -193,7 +192,7 @@ class Linearizer(OptimizedKernel):
       if b.realized in arg_bufs: self.buf_uops[i] = arg_bufs[b.realized]
     # add variables from symbolic shapes
     for var in sorted(set(v for buf in self.ast.buffers for v in buf.var_vals), key=lambda k: k.key):
-      assert var.expr is not None
+      assert not var.expand_mark
       self.loop_uops[var.expr] = self.uop(UOps.DEFINE_GLOBAL, dtypes.int32, (), (var.expr, dtypes._arg_int32))
     # define local buffers
     for lb in self.local_alias.values():
@@ -220,17 +219,17 @@ class Linearizer(OptimizedKernel):
     # define indexes
     global_idxs, loop_global_idxs = get_grouped_dims("gidx", 0, self.full_shape[:self.global_dims], 3 if self.opts.has_local else 0)
     local_idxs, loop_local_idxs = get_grouped_dims("lidx", self.global_dims, self.full_shape[self.global_dims:self.first_reduce+len(self.group_for_reduce)], 3 if self.opts.has_local else 0)
-    full_upcast_idxs = [Variable(None, 0, s-1) for s in self.full_shape[self.shape_len-self.upcasted:]]
-    upcast_idxs = [Variable(None, 0, s-1) for s in self.output_shape[self.shape_len-self.upcasted:]]
+    full_upcast_idxs = [Variable(f"uidx{j}", 0, self.full_shape[j]-1, expand=True) for j in range(self.shape_len-self.upcasted,self.shape_len)]
+    upcast_idxs = [Variable(f"uidx{j}", 0, self.output_shape[j]-1, expand=True) for j in range(self.shape_len-self.upcasted,self.shape_len)]
 
     # global and local loops
     def render_loop(xx:List[Variable]):
       self.loop_uops.update({x.expr:self.uop(UOps.LOOP, dtypes.int32, (
         self.const(x.min) if isinstance(x.min, int) else cast(Variable, x.min).render(self.render_ops, self),
-        self.const(x.max) if isinstance(x.max, int) else cast(Variable, x.max).render(self.render_ops, self))) for x in xx if not isinstance(x, NumNode) and x.expr is not None})
+        self.const(x.max) if isinstance(x.max, int) else cast(Variable, x.max).render(self.render_ops, self))) for x in xx if not isinstance(x, NumNode) and not x.expand_mark})
     def end_loop(xx:List[Variable]):
       for x in xx[::-1]:
-        if not isinstance(x, NumNode) and x.expr is not None:
+        if not isinstance(x, NumNode) and not x.expand_mark:
           loop_uop = self.loop_uops[x.expr]
           if loop_uop.uop == UOps.LOOP: self.uop(UOps.END, None, (loop_uop,))
 
@@ -289,7 +288,7 @@ class Linearizer(OptimizedKernel):
               extra_locals.remove(elc[0])
               elc = [el for el in extra_locals if v.min == el.min and rem%(el.max+1) == 0]
             if DEBUG >= 4 and rem > 1: print(f"failed upcasting@{j} partial stride {rem} extra locals {extra_locals}")
-            this_upcast_idxs.append(tacc + Variable(None, 0, rem-1))
+            this_upcast_idxs.append(tacc + Variable(f"alidx{j}", 0, rem-1, expand=True))
           else:
             if DEBUG >= 4: print(f"failed upcasting@{j} stride {v} extra locals {extra_locals}")
             this_upcast_idxs.append(v)

@@ -4,7 +4,7 @@ import functools
 import itertools
 from math import gcd
 from tinygrad.helpers import partition
-from typing import List, Dict, Callable, Tuple, Type, Union, Optional, Any, Iterator
+from typing import List, Dict, Callable, Tuple, Type, Union, Optional, Any, Iterator, Sequence
 
 # NOTE: Python has different behavior for negative mod and floor div than c
 # symbolic matches the Python behavior, but the code output is agnostic, and will never have negative numbers in div or mod
@@ -26,9 +26,9 @@ class Node:
   def expand(self, idxs:Optional[Tuple[VariableOrNum, ...]]=None) -> List[Node]:
     if idxs is None: idxs = (self.expand_idx(),)
     return [self.substitute(dict(zip(idxs, (NumNode(x) for x in rep)))) for rep in Node.iter_idxs(idxs)]
-  def expand_idx(self) -> VariableOrNum: return next((v for v in self.vars() if v.expr is None), NumNode(0))
+  def expand_idx(self) -> VariableOrNum: return next((v for v in self.vars() if v.expand_mark), NumNode(0))
   @staticmethod
-  def iter_idxs(idxs:Tuple[VariableOrNum, ...]) -> Iterator[Tuple[int,...]]:
+  def iter_idxs(idxs:Sequence[VariableOrNum, ...]) -> Iterator[Tuple[int,...]]:
     yield from (x[::-1] for x in itertools.product(*[[x for x in range(v.min, v.max + 1)] for v in idxs[::-1]]))
 
   # substitute Variables with the values in var_vals
@@ -154,13 +154,13 @@ class Node:
 # 4 basic node types
 
 class Variable(Node):
-  def __new__(cls, expr:Optional[str], nmin:int, nmax:int):
+  def __new__(cls, expr:str, nmin:int, nmax:int, expand=False):
     assert nmin >= 0 and nmin <= nmax
     if nmin == nmax: return NumNode(nmin)
     return super().__new__(cls)
 
-  def __init__(self, expr:Optional[str], nmin:int, nmax:int):
-    self.expr, self.min, self.max = expr, nmin, nmax
+  def __init__(self, expr:str, nmin:int, nmax:int, expand=False):
+    self.expr, self.min, self.max, self.expand_mark = expr, nmin, nmax, expand
   def vars(self): return [self]
   def substitute(self, var_vals: Dict[VariableOrNum, Node]) -> Node: return var_vals[self] if self in var_vals else self
 
@@ -325,7 +325,7 @@ def sym_infer(a: Union[Node, int], var_vals: Dict[Variable, int]) -> int:
 VariableOrNum = Union[Variable, NumNode]
 
 render_python: Dict[Type, Callable] = {
-  Variable: lambda self,ops,ctx: f"{self.expr}[{self.min}-{self.max}]" if ctx == "DEBUG" else f"{self.expr}",
+  Variable: lambda self,ops,ctx: f"{self.expr}[{'e' if self.expand_mark else ''}{self.min}-{self.max}]" if ctx == "DEBUG" else f"{self.expr}",
   NumNode: lambda self,ops,ctx: f"{self.b}",
   MulNode: lambda self,ops,ctx: f"({self.a.render(ops,ctx)}*{sym_render(self.b,ops,ctx)})",
   DivNode: lambda self,ops,ctx: f"({self.a.render(ops,ctx)}//{self.b})",
