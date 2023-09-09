@@ -101,7 +101,7 @@ class Linearizer(OptimizedKernel):
     localtype = dtypes.float32 if amt == 1 else dtypes._float4 if amt == 4 else dtypes._float2
 
     # no expand vars should be shared between idxs
-    expand_vars = sum(idx.expand_idxs() for idx in idxs)
+    expand_vars = sum([idx.expand_idxs() for idx in idxs], tuple())
     e_idxs, e_valids = g_idx.expand(expand_vars), g_valid.expand(expand_vars)
 
     ret = []
