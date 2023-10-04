@@ -1,7 +1,7 @@
 import math
 from typing import Optional, Union, Tuple
 from tinygrad.tensor import Tensor
-from tinygrad.helpers import prod, all_int
+from tinygrad.helpers import prod, dtypes, all_int
 
 class BatchNorm2d:
   def __init__(self, sz, eps=1e-5, affine=True, track_running_stats=True, momentum=0.1):
@@ -14,6 +14,8 @@ class BatchNorm2d:
     self.num_batches_tracked = Tensor.zeros(1, requires_grad=False)
 
   def __call__(self, x:Tensor):
+    half = x.dtype == dtypes.half
+    x = x.float() if half else x
     if Tensor.training:
       # This requires two full memory accesses to x
       # https://github.com/pytorch/pytorch/blob/c618dc13d2aa23625cb0d7ada694137532a4fa33/aten/src/ATen/native/cuda/Normalization.cuh
@@ -33,7 +35,8 @@ class BatchNorm2d:
       # NOTE: this can be precomputed for static inference. we expand it here so it fuses
       batch_invstd = self.running_var.reshape(1, -1, 1, 1).expand(x.shape).add(self.eps).rsqrt()
 
-    return x.batchnorm(self.weight, self.bias, batch_mean, batch_invstd)
+    x = x.batchnorm(self.weight, self.bias, batch_mean, batch_invstd)
+    return x.half() if half else x
 
 # TODO: these Conv lines are terrible
 def Conv1d(in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
@@ -43,7 +46,7 @@ class Conv2d:
   def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
     self.kernel_size = (kernel_size, kernel_size) if isinstance(kernel_size, int) else tuple(kernel_size)
     self.stride, self.padding, self.dilation, self.groups = stride, padding, dilation, groups
-    self.weight = self.initialize_weight(out_channels, in_channels, groups)
+    self.weight = Tensor.kaiming_uniform(out_channels, in_channels//groups, *self.kernel_size, a=math.sqrt(5))
     assert all_int(self.weight.shape), "does not support symbolic shape"
     bound = 1 / math.sqrt(prod(self.weight.shape[1:]))
     self.bias = Tensor.uniform(out_channels, low=-bound, high=bound) if bias else None
@@ -51,20 +54,20 @@ class Conv2d:
   def __call__(self, x):
     return x.conv2d(self.weight, self.bias, padding=self.padding, stride=self.stride, dilation=self.dilation, groups=self.groups)
 
-  def initialize_weight(self, out_channels, in_channels, groups): return Tensor.kaiming_uniform(out_channels, in_channels//groups, *self.kernel_size, a=math.sqrt(5))
-
 def ConvTranspose1d(in_channels, out_channels, kernel_size, stride=1, padding=0, output_padding=0, dilation=1, groups=1, bias=True):
   return ConvTranspose2d(in_channels, out_channels, (kernel_size,), stride, padding, output_padding, dilation, groups, bias)
 
-class ConvTranspose2d(Conv2d):
+class ConvTranspose2d:
   def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, output_padding=0, dilation=1, groups=1, bias=True):
-    super().__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias)
-    self.output_padding = output_padding
+    self.kernel_size = (kernel_size, kernel_size) if isinstance(kernel_size, int) else tuple(kernel_size)
+    self.stride, self.padding, self.output_padding, self.dilation, self.groups = stride, padding, output_padding, dilation, groups
+    self.weight = Tensor.kaiming_uniform(in_channels, out_channels//groups, *self.kernel_size, a=math.sqrt(5))
+    assert all_int(self.weight.shape), "does not support symbolic shape"
+    bound = 1 / math.sqrt(prod(self.weight.shape[1:]))
+    self.bias = Tensor.uniform(out_channels, low=-bound, high=bound) if bias else None
 
   def __call__(self, x):
     return x.conv_transpose2d(self.weight, self.bias, padding=self.padding, output_padding=self.output_padding, stride=self.stride, dilation=self.dilation, groups=self.groups)
-
-  def initialize_weight(self, out_channels, in_channels, groups): return Tensor.kaiming_uniform(in_channels, out_channels//groups, *self.kernel_size, a=math.sqrt(5))
 
 class Linear:
   def __init__(self, in_features, out_features, bias=True):
