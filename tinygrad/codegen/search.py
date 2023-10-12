@@ -58,6 +58,11 @@ def time_linearizer(lin:Linearizer, rawbufs:List[RawBuffer], allow_test_size=Tru
   if logtm: logtm.write(str((lin.ast, lin.applied_opts, tms))+"\n")
   return min(tms)
 
+def run_and_time(prg, bufs, var_vals, baseline=None):
+  first_tm = prg.exec(bufs, var_vals, force_wait=True, optimizing=True)
+  if baseline is not None and baseline*5 < first_tm*1000: return first_tm*1000  # very slow
+  return min([first_tm]+[prg.exec(bufs, var_vals, force_wait=True, optimizing=True) for _ in range(10)])*1000
+
 # get (scrap) buffers for timing the linearizer
 def bufs_from_lin(lin:Linearizer) -> List[RawBuffer]:
   bufsts:DefaultDict[int, List[MemBuffer]] = defaultdict(list)

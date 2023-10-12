@@ -64,3 +64,13 @@ def lin_to_feats(lin):
 
   assert len(ret) == 240, f"wrong len {len(ret)}"
   return ret
+
+from tinygrad.ops import Device
+def compile_kernel(k):
+  k.linearize()
+  assert len(k.uops) < 2 ** 12, f"too many uops: {len(k.uops)}"  # device target compiler will take significantly longer than Linearizer
+  prg = Device[Device.DEFAULT].to_program(k)
+  return k.display_name, prg
+
+def start_compile(pool, k, **kwargs):
+  return pool.apply_async(compile_kernel, (k,), kwargs)

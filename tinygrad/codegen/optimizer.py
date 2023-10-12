@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Tuple, List, cast, Optional
+from typing import Tuple, List, cast, Optional, NamedTuple
 from dataclasses import dataclass
 import itertools, math, os
 from tinygrad.helpers import DEBUG, prod, getenv, ImageDType, dtypes
@@ -13,8 +13,7 @@ class OptOps(Enum):
   UPCAST = auto(); LOCAL = auto(); GROUP = auto(); GROUPTOP = auto() # noqa: E702
   def __lt__(self, x:OptOps): return self.value < x.value
 
-@dataclass(frozen=True, order=True)
-class Opt:
+class Opt(NamedTuple):
   op: OptOps
   axis: int
   amt: int
@@ -321,6 +320,10 @@ class OptimizedKernel(Kernel):
     self.simplify_ones()
 
   def apply_opt(self, opt:Opt):
+    assert opt.axis < self.first_reduce or self.first_reduce + len(self.group_for_reduce) <= opt.axis < len(self.full_unupcasted_shape)
+    if opt.op in [OptOps.GROUP, OptOps.GROUPTOP]: assert opt.axis >= self.first_reduce + len(self.group_for_reduce)
+    if opt.op in [OptOps.LOCAL]: assert opt.axis < self.first_reduce
+
     self.applied_opts.append(opt)
     assert self.full_shape[opt.axis] % opt.amt == 0, "no longer valid shift"
     if opt.op == OptOps.LOCAL:        # cyan
