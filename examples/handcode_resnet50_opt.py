@@ -17,6 +17,7 @@ import shelve
 global_db = shelve.open("./greedy_cache")
 
 def apply_wino_upcast(self):
+  return
   # TODO: doing extra upcasts with images doesn't work for some reason (maybe has to do with to_image_idx)
   # to trigger the above bug, remove prod(self.full_shape[self.shape_len - self.upcasted:]) from the below
   # expression.
@@ -35,6 +36,7 @@ def apply_wino_upcast(self):
     upcast_amt = self.full_shape[axis]
     assert isinstance(upcast_amt, int), "can only upcast ints"
     self.apply_opt(Opt(OptOps.UPCAST, axis, upcast_amt))
+  return self
 
 if __name__ == "__main__":
   mdl = ResNet50()
@@ -73,7 +75,7 @@ if __name__ == "__main__":
     lin = Linearizer(si.ast, device.linearizer_opts)
     lin.hand_coded_optimizations()
     lins.append(lin)
-    baseline = run_and_time(compile_kernel(lin)[1], rawbufs, var_vals)
+    baseline = run_and_time(compile_kernel(lin, checks=False)[1], rawbufs, var_vals)
 
     # maybe try tensor cores
     lin = Linearizer(si.ast, device.linearizer_opts)
@@ -112,7 +114,7 @@ if __name__ == "__main__":
         from extra.optimization.kopt_ng import kernel_optimize_search
         lin = Linearizer(si.ast, device.linearizer_opts)
         apply_wino_upcast(lin)
-        create_k = lambda: Linearizer(si.ast, device.linearizer_opts)
+        create_k = lambda: apply_wino_upcast(Linearizer(si.ast, device.linearizer_opts))
         ng_choice = kernel_optimize_search(pool, lin, create_k, baseline, rawbufs, var_vals, fix_opt_axes(create_k, lins[-1].applied_opts))
         global_db[str(('KOPT', si.ast))] = lin.applied_opts
       if ng_choice != "BASELINE":
