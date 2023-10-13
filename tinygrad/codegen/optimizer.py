@@ -11,6 +11,7 @@ from enum import Enum, auto
 
 class OptOps(Enum):
   UPCAST = auto(); UNROLL = auto(); LOCAL = auto(); GROUP = auto(); GROUPTOP = auto() # noqa: E702
+  LOCALTOP = auto();
   def __lt__(self, x:OptOps): return self.value < x.value
 
 class Opt(NamedTuple):
@@ -300,22 +301,23 @@ class OptimizedKernel(Kernel):
     return False
 
   def apply_opt(self, opt:Opt):
-    assert opt.axis < self.first_reduce-self.local_dims or self.first_reduce + len(self.group_for_reduce) <= opt.axis < len(self.full_unupcasted_shape)
-    if opt.op in [OptOps.GROUP, OptOps.GROUPTOP]: assert opt.axis >= self.first_reduce + len(self.group_for_reduce)
-    if opt.op in [OptOps.LOCAL]: assert opt.axis < self.first_reduce-self.local_dims
+    #assert opt.axis < self.first_reduce-self.local_dims or self.first_reduce + len(self.group_for_reduce) <= opt.axis < len(self.full_unupcasted_shape)
+    #if opt.op in [OptOps.GROUP, OptOps.GROUPTOP]: assert opt.axis >= self.first_reduce + len(self.group_for_reduce)
+    #if opt.op in [OptOps.LOCAL]: assert opt.axis < self.first_reduce-self.local_dims
 
     self.applied_opts.append(opt)
-    axis = opt.axis + (self.first_reduce if opt.op == OptOps.UNROLL else 0)
+    axis = opt.axis + (self.first_reduce if opt.op in [OptOps.UNROLL, OptOps.GROUP, OptOps.GROUPTOP] else 0)
+    axis = axis + (len(self.group_for_reduce) if opt.op in [OptOps.GROUP, OptOps.GROUPTOP] else 0)
     assert self.full_shape[axis] % opt.amt == 0, "no longer valid shift"
     if opt.op == OptOps.LOCAL:        # cyan
       assert axis < (self.first_reduce-self.local_dims), "can't local a local or reduce"
-      self.shift_to(axis, opt.amt, insert_before=self.first_reduce)
+      self.shift_to(axis, opt.amt, insert_before=self.first_reduce-self.local_dims)
       self.local_dims += 1
     elif opt.op == OptOps.GROUP:      # green
-      self.shift_to(axis, opt.amt, insert_before=self.first_reduce + len(self.group_for_reduce))
+      self.shift_to(axis, opt.amt, insert_before=self.first_reduce)
       self.group_for_reduce.append(opt.amt)
     elif opt.op == OptOps.GROUPTOP:   # green
-      self.shift_to(axis, opt.amt, top=True, insert_before=self.first_reduce + len(self.group_for_reduce))
+      self.shift_to(axis, opt.amt, top=True, insert_before=self.first_reduce)
       self.group_for_reduce.append(opt.amt)
     elif opt.op == OptOps.UNROLL:     # purple
       assert axis < self.shape_len-self.upcasted, "can't upcasted already upcasted"
@@ -358,7 +360,7 @@ class OptimizedKernel(Kernel):
           if self.full_shape[self.first_reduce]%MV_THREADS_PER_ROW == 0 and self.full_shape[global_idx]%(MV_BLOCKSIZE*MV_ROWS_PER_THREAD) == 0:
             if DEBUG >= 3: print(f"MATVEC: full_shape={self.full_shape} first_reduce={self.first_reduce} buf0_strides={buf0_strides} blocksize={MV_BLOCKSIZE} threads_per_row={MV_THREADS_PER_ROW} rows_per_thread{MV_ROWS_PER_THREAD}")
             if MV_THREADS_PER_ROW > 1:
-              self.apply_opt(Opt(OptOps.GROUP, self.first_reduce, MV_THREADS_PER_ROW))
+              self.apply_opt(Opt(OptOps.GROUP, 0, MV_THREADS_PER_ROW))
             if MV_BLOCKSIZE > 1:
               self.apply_opt(Opt(OptOps.LOCAL, global_idx, MV_BLOCKSIZE))
             if MV_ROWS_PER_THREAD > 1:
@@ -371,7 +373,7 @@ class OptimizedKernel(Kernel):
         # TODO: use 1024 if it's allowed in a smarter way
         for sz in (([256, 16]) if prod(self.sts[0].shape[:self.first_reduce]) <= 32 else [16]):
           if all(st.shape[self.first_reduce] % sz == 0 or st.shape[self.first_reduce] == 1 for st in self.sts):
-            self.apply_opt(Opt(OptOps.GROUPTOP, self.first_reduce + len(self.group_for_reduce), sz))
+            self.apply_opt(Opt(OptOps.GROUPTOP, 0, sz))
             break
 
       # are we upcasting in mid reduce? (only for images)
@@ -379,7 +381,7 @@ class OptimizedKernel(Kernel):
         axes = self.sts[0].unit_stride_axes()
         assert len(axes) == 1, f"wrong number of stride 1 axis : {axes}"
         if self.sts[0].shape[axes[0]]%4 == 0:
-          self.apply_opt(Opt(OptOps.GROUP, axes[0], 4))
+          self.apply_opt(Opt(OptOps.GROUP, axes[0] - self.first_reduce - len(self.group_for_reduce), 4))
 
     # now do everything required
     self.required_optimizations()

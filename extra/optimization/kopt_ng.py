@@ -21,15 +21,15 @@ def kernel_optimize_opts(k:Linearizer, suggestion):
   import nevergrad as ng
   suggestion = suggestion_to_dict(suggestion)
   opts = []
-  for i in range(k.first_reduce):
+  for i in range(k.shape_len):
     # TODO: the upcast always happen first, you might want to reverse this?
     # TODO: the order of the locals might improve things too
     opts.append([Opt(OptOps.UPCAST, i, s) for s in get_divisors(k.full_shape[i], max_div=8, extra=suggestion.get((OptOps.UPCAST, i)))])
     opts.append([Opt(OptOps.LOCAL, i, s) for s in get_divisors(k.full_shape[i], min_div=4, extra=suggestion.get((OptOps.LOCAL, i)))])
-  for i in range(k.first_reduce, k.shape_len):
-    opts.append([Opt(OptOps.UPCAST, i, s) for s in get_divisors(k.full_shape[i], max_div=8, extra=suggestion.get((OptOps.UPCAST, i)))])
-    opts.append([Opt(OptOps.GROUP, i, s) for s in get_divisors(k.full_shape[i], min_div=4, extra=suggestion.get((OptOps.GROUP, i))) if all(st.shape[i] % s == 0 or st.shape[i] == 1 for st in k.sts)])
-    opts.append([Opt(OptOps.GROUPTOP, i, s) for s in get_divisors(k.full_shape[i], min_div=4, extra=suggestion.get((OptOps.GROUPTOP, i))) if all(st.shape[i] % s == 0 or st.shape[i] == 1 for st in k.sts)])
+  #for i in range(k.first_reduce, k.shape_len):
+  #  opts.append([Opt(OptOps.UPCAST, i, s) for s in get_divisors(k.full_shape[i], max_div=8, extra=suggestion.get((OptOps.UPCAST, i)))])
+  #  opts.append([Opt(OptOps.GROUP, i, s) for s in get_divisors(k.full_shape[i], min_div=4, extra=suggestion.get((OptOps.GROUP, i))) if all(st.shape[i] % s == 0 or st.shape[i] == 1 for st in k.sts)])
+  #  opts.append([Opt(OptOps.GROUPTOP, i, s) for s in get_divisors(k.full_shape[i], min_div=4, extra=suggestion.get((OptOps.GROUPTOP, i))) if all(st.shape[i] % s == 0 or st.shape[i] == 1 for st in k.sts)])
   # nevergrad parameters, default parameter choice
   return [ng.p.TransitionChoice(opt) for opt in opts], [opt[0] for opt in opts]
 
@@ -96,9 +96,15 @@ def fix_opt_axes(create_k, opts):
   axis_idxs = list(range(len(k.full_shape)))
   fixed_ops = []
   for opt in opts:
-    axis = opt.axis
+    op, axis, amt = opt
+    if opt.op == OptOps.UNROLL:
+      op = OptOps.UPCAST
+      axis += k.first_reduce
+    if opt.op == OptOps.GROUP: op = OptOps.LOCAL
+    if opt.op == OptOps.GROUPTOP: op = OptOps.LOCALTOP
+
     if axis >= k.first_reduce: axis -= k.local_dims + len(k.group_for_reduce)
-    fixed_ops.append(Opt(opt.op, axis_idxs[axis], opt.amt))
+    fixed_ops.append(Opt(op, axis_idxs[axis], amt))
 
     if opt.amt == k.full_shape[axis]: axis_idxs.pop(axis)
 
@@ -114,6 +120,12 @@ def apply_ng_opt(k, x):
 
     pre_axis = axis = axis_idxs.index(axis)
     if axis >= orig_first_reduce: axis += k.local_dims + len(k.group_for_reduce)
+
+    if op == OptOps.UPCAST and axis >= k.first_reduce:
+      axis -= k.first_reduce
+      op = OptOps.UNROLL
+    if op == OptOps.LOCAL and axis >= k.first_reduce: op = OptOps.GROUP
+    if op == OptOps.LOCALTOP and axis >= k.first_reduce: op = OptOps.GROUPTOP
 
     if amt == k.full_shape[axis]: axis_idxs.pop(pre_axis)
 

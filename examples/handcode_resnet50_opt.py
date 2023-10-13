@@ -95,13 +95,13 @@ if __name__ == "__main__":
         beam = [lin]
         for greedy_i in range(15):
           acted_lins = flatten([get_linearizer_actions(lin).items() for lin in beam])
-          compiling = [(i, start_compile(pool, lin)) for i, lin in acted_lins.items()]
-          timed_lins = {i: catch_exception(run_and_time, on_fail=float('inf'))(prg.get(timeout=5)[1], rawbufs, var_vals) for i, prg in tqdm(compiling, desc=f'greedy layer {greedy_i}') if i != 0}
-          opts = sorted(timed_lins.items(), key=lambda x: x[1])
+          compiling = [(lin, start_compile(pool, lin)) for i, lin in acted_lins if i != 0]
+          timed_lins = [(lin, catch_exception(lambda: run_and_time(prg.get(timeout=5)[1], rawbufs, var_vals), on_fail=float('inf'))()) for lin, prg in tqdm(compiling, desc=f'greedy layer {greedy_i}', disable=DEBUG < 1)]
+          opts = sorted(timed_lins, key=lambda x: x[1])
           if len(opts) == 0 or best_time <= opts[0][1]: break   # we are done
           best_time = opts[0][1]
           beam = [x[0] for x in opts[:getenv("BEAM")]]
-          if DEBUG >= 0: print(f"{opts[0][1]:10.2f} ms from {len(opts):3d} actions", lin.colored_shape())
+          if DEBUG >= 1: print(f"{opts[0][1]:10.2f} ms from {len(opts):3d} actions", beam[0].colored_shape())
         lin = beam[0]
         global_db[str(lin.ast)] = lin.applied_opts
       lins.append(lin)
