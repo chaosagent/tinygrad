@@ -6,7 +6,7 @@ from tinygrad.tensor import Tensor
 from tinygrad.ops import LoadOps, Device, Compiled
 from tinygrad.codegen.linearizer import Linearizer
 from tinygrad.codegen.search import bufs_from_lin, time_linearizer, get_linearizer_actions, Opt, OptOps
-from tinygrad.helpers import ansilen, DEBUG, getenv, prod
+from tinygrad.helpers import ansilen, DEBUG, getenv, flatten, prod
 from tinygrad.graph import print_tree
 from tinygrad.lazy import vars_from_ast
 from tinygrad.shape.symbolic import sym_infer
@@ -82,8 +82,8 @@ if __name__ == "__main__":
     if lin.apply_tensor_cores():
       lins.append(lin)
 
-    # try a greedy search
-    if getenv("GREEDY"):
+    # try a beam search
+    if getenv("BEAM"):
       lin = Linearizer(si.ast, device.linearizer_opts)
       if str(lin.ast) in global_db:
         for ao in global_db[str(lin.ast)]:
@@ -91,19 +91,18 @@ if __name__ == "__main__":
         best_time = run_and_time(compile_kernel(lin)[1], rawbufs, var_vals)
       else:
         apply_wino_upcast(lin)
-        best, best_time = lin, 10_000
+        best_time = float('inf')
+        beam = [lin]
         for greedy_i in range(15):
-          acted_lins = get_linearizer_actions(lin)
+          acted_lins = flatten([get_linearizer_actions(lin).items() for lin in beam])
           compiling = [(i, start_compile(pool, lin)) for i, lin in acted_lins.items()]
-          timed_lins = {i: catch_exception(run_and_time, on_fail=float('inf'))(prg.get(timeout=5)[1], rawbufs, var_vals) for i, prg in tqdm(compiling, desc=f'greedy layer {greedy_i}')}
+          timed_lins = {i: catch_exception(run_and_time, on_fail=float('inf'))(prg.get(timeout=5)[1], rawbufs, var_vals) for i, prg in tqdm(compiling, desc=f'greedy layer {greedy_i}') if i != 0}
           opts = sorted(timed_lins.items(), key=lambda x: x[1])
-          if opts[0][0] == 0: break   # we are done
-          lin = acted_lins[opts[0][0]]
-          if opts[0][1] < best_time:
-            best = lin
-            best_time = opts[0][1]
+          if len(opts) == 0 or best_time <= opts[0][1]: break   # we are done
+          best_time = opts[0][1]
+          beam = [x[0] for x in opts[:getenv("BEAM")]]
           if DEBUG >= 0: print(f"{opts[0][1]:10.2f} ms from {len(opts):3d} actions", lin.colored_shape())
-        lin = best
+        lin = beam[0]
         global_db[str(lin.ast)] = lin.applied_opts
       lins.append(lin)
       baseline = min(baseline, best_time)
