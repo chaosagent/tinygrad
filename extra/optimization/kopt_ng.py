@@ -42,16 +42,16 @@ def suggestion_to_dict(suggestion):
 def normalize_suggestion(default_opt, suggestion):
   return tuple([Opt(op, axis, amt) for (op, axis), amt in ({(op, axis): amt for op, axis, amt in default_opt} | suggestion_to_dict(suggestion)).items()])
 
-def kernel_optimize_search(k:Linearizer, create_k:Callable[[], Linearizer], baseline, bufs, var_vals, suggestion):
+def kernel_optimize_search(pool, k:Linearizer, create_k:Callable[[], Linearizer], baseline, bufs, var_vals, suggestion):
   import nevergrad as ng
   opts, default_opt = kernel_optimize_opts(k, suggestion)
   if not opts: return "BASELINE"
   search_space = prod([len(x.choices) for x in opts])
   st = time.perf_counter()
-  budget, num_workers = getenv("BUDGET", 2000), getenv("KOPT_WORKERS", 48)
+  budget = getenv("BUDGET", 2000)
+  num_workers = pool._processes
   optimizer = ng.optimizers.NGOpt(parametrization=ng.p.Tuple(*opts), budget=min(search_space, budget), num_workers=num_workers)
-  print(suggestion)
-  print(k.full_shape, [y for y in normalize_suggestion(default_opt, suggestion) if y.amt != 1])
+  #print(k.full_shape, [y for y in normalize_suggestion(default_opt, suggestion) if y.amt != 1])
   optimizer.suggest(normalize_suggestion(default_opt, suggestion))
   optimizer.register_callback("tell", (bar := ng.callbacks.ProgressBar()))
 
@@ -59,30 +59,32 @@ def kernel_optimize_search(k:Linearizer, create_k:Callable[[], Linearizer], base
   best, best_ran, best_name = 10_000, 0, ""
   q: List[Any] = []
   ran = 0
-  with mp.Pool(num_workers) as pool:
-    while optimizer.num_tell < cast(int, optimizer.budget):
-      while len(q) < num_workers and optimizer.num_ask < cast(int, optimizer.budget):
-        ask = optimizer.ask()
-        try:
-          this_k = create_k()
-          apply_ng_opt(this_k, ask.value)
-        except Exception:
-          if DEBUG >= 3: traceback.print_exc()
-          optimizer.tell(ask, 10_000, constraint_violation=1.0)
+  while optimizer.num_tell < cast(int, optimizer.budget):
+    while len(q) < num_workers and optimizer.num_ask < cast(int, optimizer.budget):
+      ask = optimizer.ask()
+      try:
+        this_k = create_k()
+        apply_ng_opt(this_k, ask.value)
+      except Exception:
+        if DEBUG >= 3: traceback.print_exc()
+        optimizer.tell(ask, 10_000, constraint_violation=1.0)
+        q.append((None, None))
+      else:
         q.append((ask, start_compile(pool, this_k)))
-      while len(q) > num_workers-1 or (optimizer.num_ask == optimizer.budget and q):
-        ask, prg = q.pop(0)
-        try:
-          name, prg = prg.get(timeout=5)
-          tm = run_and_time(prg, bufs, var_vals, baseline=baseline)
-        except Exception:
-          if DEBUG >= 3: traceback.print_exc()
-          optimizer.tell(ask, 10_000, constraint_violation=1.0)
-        else:
-          optimizer.tell(ask, tm)
-          ran += 1
-          if tm < best: best, best_ran, best_name = tm, ran, name
-          bar._progress_bar.set_description(f"{baseline:7.3f}/{best:7.3f} ({baseline / best * 100:4.0f}%) @ {best_ran:4}/{ran:4} - {best_name + ' ' * (37 - ansilen(best_name))}")
+    while len(q) > num_workers-1 or (optimizer.num_ask == optimizer.budget and q):
+      ask, prg = q.pop(0)
+      if prg is None: continue
+      try:
+        name, prg = prg.get(timeout=5)
+        tm = run_and_time(prg, bufs, var_vals, baseline=baseline)
+      except Exception:
+        if DEBUG >= 3: traceback.print_exc()
+        optimizer.tell(ask, 10_000, constraint_violation=1.0)
+      else:
+        optimizer.tell(ask, tm)
+        ran += 1
+        if tm < best: best, best_ran, best_name = tm, ran, name
+        bar._progress_bar.set_description(f"{baseline:7.3f}/{best:7.3f} ({baseline / best * 100:4.0f}%) @ {best_ran:4}/{ran:4} - {best_name + ' ' * (37 - ansilen(best_name))}")
   recommendation = optimizer.provide_recommendation()
   et = time.perf_counter() - st
   del bar, optimizer
@@ -116,5 +118,8 @@ def apply_ng_opt(k, x):
     if amt == k.full_shape[axis]: axis_idxs.pop(pre_axis)
 
     k.apply_opt(Opt(op, axis, amt))
+
+  assert prod(k.full_shape[k.shape_len - k.upcasted:k.shape_len]) <= 512, "too many upcasts!"
+  assert prod(k.full_shape[k.first_reduce - k.local_dims:k.first_reduce + len(k.group_for_reduce)]) <= 1024, "too many locals!"
 
   return k.applied_opts

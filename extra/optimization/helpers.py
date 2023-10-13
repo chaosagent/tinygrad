@@ -1,6 +1,8 @@
+import functools, traceback
+
 # stuff needed to unpack a kernel
 from tinygrad.ops import LazyOp, TernaryOps, BinaryOps, UnaryOps, ReduceOps, BufferOps, MemBuffer, ConstBuffer
-from tinygrad.helpers import dtypes
+from tinygrad.helpers import dtypes, DEBUG
 from tinygrad.shape.shapetracker import ShapeTracker
 from tinygrad.shape.view import View
 from tinygrad.shape.symbolic import Variable
@@ -74,3 +76,13 @@ def compile_kernel(k):
 
 def start_compile(pool, k, **kwargs):
   return pool.apply_async(compile_kernel, (k,), kwargs)
+
+def catch_exception(f, on_fail=None):
+  @functools.wraps(f)
+  def inner(*args, **kwargs):
+    try:
+      return f(*args, **kwargs)
+    except Exception:
+      if DEBUG >= 3: traceback.print_exc()
+      return on_fail
+  return inner

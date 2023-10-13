@@ -320,9 +320,9 @@ class OptimizedKernel(Kernel):
     self.simplify_ones()
 
   def apply_opt(self, opt:Opt):
-    assert opt.axis < self.first_reduce or self.first_reduce + len(self.group_for_reduce) <= opt.axis < len(self.full_unupcasted_shape)
+    assert opt.axis < self.first_reduce-self.local_dims or self.first_reduce + len(self.group_for_reduce) <= opt.axis < len(self.full_unupcasted_shape)
     if opt.op in [OptOps.GROUP, OptOps.GROUPTOP]: assert opt.axis >= self.first_reduce + len(self.group_for_reduce)
-    if opt.op in [OptOps.LOCAL]: assert opt.axis < self.first_reduce
+    if opt.op in [OptOps.LOCAL]: assert opt.axis < self.first_reduce-self.local_dims
 
     self.applied_opts.append(opt)
     assert self.full_shape[opt.axis] % opt.amt == 0, "no longer valid shift"

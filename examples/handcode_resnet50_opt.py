@@ -1,4 +1,6 @@
 from typing import List
+from tqdm import tqdm
+import multiprocessing as mp
 from models.resnet import ResNet50
 from tinygrad.tensor import Tensor
 from tinygrad.ops import LoadOps, Device, Compiled
@@ -9,7 +11,7 @@ from tinygrad.graph import print_tree
 from tinygrad.lazy import vars_from_ast
 from tinygrad.shape.symbolic import sym_infer
 from extra.optimization.kopt_ng import run_and_time, fix_opt_axes
-from extra.optimization.helpers import compile_kernel
+from extra.optimization.helpers import compile_kernel, start_compile, catch_exception
 
 import shelve
 global_db = shelve.open("./greedy_cache")
@@ -37,6 +39,8 @@ def apply_wino_upcast(self):
 if __name__ == "__main__":
   mdl = ResNet50()
   seen = set()
+
+  pool = mp.Pool(getenv("WORKERS", 32))
 
   # the device we are optimizing for
   device: Compiled = Device[Device.DEFAULT]
@@ -82,30 +86,35 @@ if __name__ == "__main__":
       if str(lin.ast) in global_db:
         for ao in global_db[str(lin.ast)]:
           lin.apply_opt(ao)
-        best_time = time_linearizer(lin, rawbufs)
+        best_time = run_and_time(compile_kernel(lin)[1], rawbufs, var_vals)
       else:
         apply_wino_upcast(lin)
         best, best_time = lin, 10_000
-        while 1:
+        for greedy_i in range(15):
           acted_lins = get_linearizer_actions(lin)
-          timed_lins = {k:time_linearizer(v, rawbufs) for k,v in acted_lins.items()}
+          compiling = [(i, start_compile(pool, lin)) for i, lin in acted_lins.items()]
+          timed_lins = {i: catch_exception(run_and_time, on_fail=float('inf'))(prg.get(timeout=5)[1], rawbufs, var_vals) for i, prg in tqdm(compiling, desc=f'greedy layer {greedy_i}')}
           opts = sorted(timed_lins.items(), key=lambda x: x[1])
           if opts[0][0] == 0: break   # we are done
           lin = acted_lins[opts[0][0]]
           if opts[0][1] < best_time:
             best = lin
             best_time = opts[0][1]
-          if DEBUG >= 0: print(f"{opts[0][1]*1e3:10.2f} ms from {len(opts):3d} actions", lin.colored_shape())
+          if DEBUG >= 0: print(f"{opts[0][1]:10.2f} ms from {len(opts):3d} actions", lin.colored_shape())
         lin = best
         global_db[str(lin.ast)] = lin.applied_opts
       lins.append(lin)
-      baseline = min(baseline, best_time * 1000)
+      baseline = min(baseline, best_time)
     if getenv("KOPT"):
-      from extra.optimization.kopt_ng import kernel_optimize_search
-      lin = Linearizer(si.ast, device.linearizer_opts)
-      apply_wino_upcast(lin)
-      create_k = lambda: Linearizer(si.ast, device.linearizer_opts)
-      ng_choice = kernel_optimize_search(lin, create_k, baseline, rawbufs, var_vals, fix_opt_axes(create_k, lins[-1].applied_opts))
+      if str(('KOPT', si.ast)) in global_db:
+        ng_choice = global_db[str(('KOPT', si.ast))]
+      else:
+        from extra.optimization.kopt_ng import kernel_optimize_search
+        lin = Linearizer(si.ast, device.linearizer_opts)
+        apply_wino_upcast(lin)
+        create_k = lambda: Linearizer(si.ast, device.linearizer_opts)
+        ng_choice = kernel_optimize_search(pool, lin, create_k, baseline, rawbufs, var_vals, fix_opt_axes(create_k, lins[-1].applied_opts))
+        global_db[str(('KOPT', si.ast))] = lin.applied_opts
       if ng_choice != "BASELINE":
         for op in ng_choice: lin.apply_opt(op)
         lins.append(lin)

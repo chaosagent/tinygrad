@@ -1,5 +1,6 @@
 from typing import Dict, List, cast, DefaultDict, Optional
 from copy import deepcopy
+import traceback
 from tinygrad.lazy import vars_from_ast
 from tinygrad.ops import Device, Compiled, MemBuffer
 from tinygrad.helpers import prod, getenv
@@ -30,7 +31,7 @@ device:Compiled = cast(Compiled, Device[Device.DEFAULT])
 
 # returns time in seconds
 logtm = open(getenv("LOGTM", ""),"a") if getenv("LOGTM", "") else None
-def time_linearizer(lin:Linearizer, rawbufs:List[RawBuffer], allow_test_size=True, cnt=3, should_copy=True) -> float:
+def time_linearizer(lin:Linearizer, rawbufs:List[RawBuffer], allow_test_size=True, cnt=5, should_copy=True) -> float:
   if should_copy: lin = deepcopy(lin)  # TODO: remove the need for this
   var_vals = {k:k.min for k in vars_from_ast(lin.ast)}
   try:
@@ -54,6 +55,7 @@ def time_linearizer(lin:Linearizer, rawbufs:List[RawBuffer], allow_test_size=Tru
     print("FAILED")
     print(lin.ast)
     print(lin.applied_opts)
+    traceback.print_exc()
     tms = [float('inf')]
   if logtm: logtm.write(str((lin.ast, lin.applied_opts, tms))+"\n")
   return min(tms)
@@ -61,7 +63,7 @@ def time_linearizer(lin:Linearizer, rawbufs:List[RawBuffer], allow_test_size=Tru
 def run_and_time(prg, bufs, var_vals, baseline=None):
   first_tm = prg.exec(bufs, var_vals, force_wait=True, optimizing=True)
   if baseline is not None and baseline*5 < first_tm*1000: return first_tm*1000  # very slow
-  return min([first_tm]+[prg.exec(bufs, var_vals, force_wait=True, optimizing=True) for _ in range(10)])*1000
+  return min([first_tm]+[prg.exec(bufs, var_vals, force_wait=True, optimizing=True) for _ in range(5)])*1000
 
 # get (scrap) buffers for timing the linearizer
 def bufs_from_lin(lin:Linearizer) -> List[RawBuffer]:
