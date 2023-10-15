@@ -19,10 +19,22 @@ global_db = shelve.open("./greedy_cache")
 def convert_parts(k, parts):
   result = []
   for axis, (local, upcast) in parts.items():
-    axis = axis if axis < k.first_reduce else axis - k.first_reduce - len(k.group_for_reduce)
-    if upcast > 1: result.append(Opt(OptOps.UNROLL if axis >= k.first_reduce else OptOps.UPCAST, axis, upcast))
-    if local > 1: result.append(Opt(OptOps.GROUP if axis >= k.first_reduce else OptOps.LOCAL, axis, local))
+    axis_ = axis if axis < k.first_reduce else axis - k.first_reduce - len(k.group_for_reduce)
+    if upcast > 1: result.append(Opt(OptOps.UNROLL if axis >= k.first_reduce else OptOps.UPCAST, axis_, upcast))
+    if local > 1: result.append(Opt(OptOps.GROUP if axis >= k.first_reduce else OptOps.LOCAL, axis_, local))
   return result
+
+def pick_beam(opts):
+  allow = 2
+  locals = {}
+  kept = []
+  for lin, tm in opts:
+    this_locals = tuple([(axis, local) for axis, (local, upcast) in lin.partitions.items()])
+    if this_locals in locals and locals[this_locals] >= allow:
+      continue
+    locals[this_locals] = locals.get(this_locals, 0) + 1
+    kept.append((lin, tm))
+  return kept[:getenv("BEAM")]
 
 def get_linearizer_actions(lin:Linearizer, create_k):
   if hasattr(lin, "partitions"): old_parts = lin.partitions
@@ -158,10 +170,11 @@ if __name__ == "__main__":
           opts = sorted(timed_lins, key=lambda x: x[1])
           if len(opts) == 0 or best_time <= opts[0][1]: break   # we are done
           best_time = opts[0][1]
-          beam = [x[0] for x in opts[:getenv("BEAM")]]
+          beam = pick_beam(opts)
           if DEBUG >= 1:
-            for kk, tm in opts[:getenv("BEAM")]:
+            for kk, tm in beam:
               print(f"{tm:10.2f} ms from {len(opts):3d} actions", kk.colored_shape())
+          beam = [x[0] for x in beam]
         lin = beam[0]
         global_db[str(lin.ast)] = lin.applied_opts
       lins.append(lin)
