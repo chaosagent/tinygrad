@@ -13,6 +13,7 @@ from tinygrad.shape.symbolic import sym_infer
 from extra.optimization.kopt_ng import run_and_time, fix_opt_axes
 from extra.optimization.helpers import compile_kernel, start_compile, catch_exception
 from copy import deepcopy
+import matplotlib.pyplot as plt
 
 import shelve
 global_db = shelve.open("./greedy_cache")
@@ -37,8 +38,8 @@ def pick_beam(opts):
     kept.append((lin, tm))
   return kept[:getenv("BEAM")]
 
-def apply_parts(create_k, a):
-  k = create_k()
+def apply_parts(fresh_k, a):
+  k = fresh_k
   try:
     [k.apply_opt(op, simplify=False) for op in convert_parts(k, a)]
     k.partitions = a
@@ -51,22 +52,20 @@ def apply_parts(create_k, a):
     return None
 
 get_linearizer_actions_cache = {}
-def get_linearizer_actions(lin:Linearizer, create_k):
-  if hasattr(lin, "partitions"): old_parts = lin.partitions
-  else: old_parts = {}
-  if (lin.ast, str(old_parts)) in get_linearizer_actions_cache:
-    return get_linearizer_actions_cache[(lin.ast, str(old_parts))]
+def get_next_parts(lin_parts, fresh_shape):
+  old_parts = lin_parts
+  #if (lin.ast, str(old_parts)) in get_linearizer_actions_cache:
+  #  return get_linearizer_actions_cache[(lin.ast, str(old_parts))]
   actions = []
-  fresh_k = create_k()
 
-  ready = prod(opt.amt for opt in lin.applied_opts) >= 2 ** 4
+  ready = prod(prod(opt) for opt in old_parts.values()) >= 2 ** 4
   powers_of_two = [2, 4, 8, 16]
   if not ready:
     splits = powers_of_two
   else:
     splits = list(range(2, 32))
 
-  for i, s in enumerate(fresh_k.full_shape):
+  for i, s in enumerate(fresh_shape):
     ol, ou = old_parts.get(i, (1, 1))
     for split in splits:
       if s % split != 0: continue
@@ -86,13 +85,17 @@ def get_linearizer_actions(lin:Linearizer, create_k):
       a, b = swapped.index((i, (ol, ou))), swapped.index((j, (ol2, ou2)))
       swapped[a], swapped[b] = (j, (ol2, ou2)), (i, (ol, ou))
       actions.append(dict(swapped))
+  #get_linearizer_actions_cache[(lin.ast, str(old_parts))] = actions
+  return actions
+
+def get_linearizer_actions(lin:Linearizer, create_k):
+  actions = get_next_parts(lin.partitions if hasattr(lin, "partitions") else {}, create_k().full_shape)
 
   from copy import deepcopy
   acted_lins = {0:deepcopy(lin)}
   for i,a in enumerate(actions):
-    k = apply_parts(create_k, a)
+    k = apply_parts(create_k(), a)
     if k is not None: acted_lins[i + 1] = k
-  get_linearizer_actions_cache[(lin.ast, str(old_parts))] = acted_lins
   return acted_lins
 
 def apply_wino_upcast(self):
@@ -118,10 +121,17 @@ def apply_wino_upcast(self):
   return self
 
 import random
-def sa_step(lin, temp, create_k):
+def sa_step(lin, fresh_lin, temp):
   for _ in range(temp):
-    lin = random.choice(list(get_linearizer_actions(lin, create_k).values()))
+    old_parts = lin.partitions if hasattr(lin, "partitions") else {}
+    new_lin = None
+    for _ in range(16):
+      new_lin = apply_parts(deepcopy(fresh_lin), random.choice(list(get_next_parts(old_parts, fresh_lin.full_shape))))
+      if new_lin is not None: break
+    if new_lin is not None: lin = new_lin
   return lin
+def sa_step_(arg):
+  return sa_step(*arg)
 
 if __name__ == "__main__":
   mdl = ResNet50()
@@ -156,7 +166,7 @@ if __name__ == "__main__":
     # "linearize" the op into uops in different ways
     lins:List[Linearizer] = []
 
-    #lin = apply_parts(lambda: Linearizer(si.ast, device.linearizer_opts), {3: (8, 2), 2: (8, 1), 1: (2, 4)})
+    #lin = apply_parts(Linearizer(si.ast, device.linearizer_opts), {3: (8, 2), 2: (8, 1), 1: (2, 4)})
     #print(lin.applied_opts)
     #run_and_time(compile_kernel(lin, checks=False)[1], rawbufs, var_vals)
     #exit(0)
@@ -171,6 +181,9 @@ if __name__ == "__main__":
     lin = Linearizer(si.ast, device.linearizer_opts)
     if lin.apply_tensor_cores():
       lins.append(lin)
+
+    #fig = plt.figure()
+    #ax = fig.add_subplot()
 
     # try a beam search
     if getenv("BEAM") or (getenv("SA") and not str(('SA', lin.ast)) in global_db):
@@ -218,13 +231,15 @@ if __name__ == "__main__":
         best_lin, best_time = beam_time[0]
         sa_set = [(deepcopy(lin), tm) for lin, tm in beam_time] * (getenv("SA") // getenv("BEAM"))
         #temps = [2] * 8 + [1] * 7
-        #temps = [2] * 4 + [1] * 2
-        temps = [3] * 2 + [2] * 4 + [1] * 2
+        temps = [2] * 8 + [1] * 2
+        #temps = [3] * 2 + [2] * 4 + [1] * 2
         gflops = sym_infer(best_lin.info.flops, var_vals) * 1e-9
         run_cache = {}
         random.seed(1337)
         for greedy_i, temp in enumerate(temps):
-          acted_lins = [((k, tm), sa_step(k, temp, lambda: Linearizer(si.ast, device.linearizer_opts))) for k, tm in sa_set]
+          sa_step_args = zip([k for k, _ in sa_set], [Linearizer(si.ast, device.linearizer_opts) for _ in sa_set], [temp for _ in sa_set])
+          sa_steps = pool.map(sa_step_, sa_step_args)
+          acted_lins = zip(sa_set, sa_steps)
           compiling = [(k, lin, start_compile(pool, deepcopy(lin))) for k, lin in acted_lins]
           timed_lins = []
           for k, lin, prg in tqdm(compiling, desc=f'SA layer {greedy_i} (temp {temp})', disable=DEBUG != 1):
@@ -238,14 +253,17 @@ if __name__ == "__main__":
               run_cache[str(lin.partitions)] = tm
             timed_lins.append((k, lin, run_cache[str(lin.partitions)]))
           winning_lins = [(k, ktm) if ktm < lintm else (lin, lintm) for (k, ktm), lin, lintm in timed_lins]
+          #ax.hist([tm for k, tm in winning_lins])
+          #plt.show(block=False)
           winning_lins = sorted(winning_lins, key=lambda x: x[1])
           if winning_lins[0][1] < best_time:
             best_lin, best_time = winning_lins[0]
           if DEBUG >= 1:
-            for kk, tm in winning_lins[:8]:
-              print(f"{tm:10.2f} ms ({gflops / tm * 1000:6.0f} gflops)", kk.colored_shape())
+            ranks = list(range(8)) + [15, 31, 63, 127, 255, 511, 767]
+            for rank, (kk, tm) in zip(ranks, [winning_lins[i] for i in ranks]):
+              print(f"rank {rank} {tm:10.2f} ms ({gflops / tm * 1000:6.0f} gflops)", kk.colored_shape())
           sa_set = winning_lins
-          #sa_set = winning_lins[:len(winning_lins)/2] * 2
+          #sa_set = winning_lins[:len(winning_lins)//2] * 2
         lin, best_time = sa_set[0]
         global_db[str(('SA', lin.ast))] = lin.applied_opts
       lins.append(lin)
