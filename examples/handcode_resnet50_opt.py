@@ -13,7 +13,7 @@ from tinygrad.shape.symbolic import sym_infer
 from extra.optimization.kopt_ng import run_and_time, fix_opt_axes
 from extra.optimization.helpers import compile_kernel, start_compile, catch_exception
 from copy import deepcopy
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 
 import shelve
 global_db = shelve.open("./greedy_cache")
@@ -29,13 +29,17 @@ def convert_parts(k, parts):
 def pick_beam(opts):
   allow = getenv("BEAM_DIV", 2)
   locals = {}
+  seen = set()
   kept = []
   for lin, tm in opts:
+    this_parts = tuple([x for x in lin.partitions.items()])
+    if this_parts in seen: continue
     this_locals = tuple([(axis, local) for axis, (local, upcast) in lin.partitions.items()])
     if this_locals in locals and locals[this_locals] >= allow:
       continue
     locals[this_locals] = locals.get(this_locals, 0) + 1
     kept.append((lin, tm))
+    seen.add(this_parts)
   return kept[:getenv("BEAM")]
 
 def apply_parts(fresh_k, a):
@@ -173,6 +177,7 @@ if __name__ == "__main__":
 
     # always try hand coded opt
     lin = Linearizer(si.ast, device.linearizer_opts)
+    gflops = sym_infer(lin.info.flops, var_vals) * 1e-9
     lin.hand_coded_optimizations()
     lins.append(lin)
     baseline = run_and_time(compile_kernel(lin, checks=False)[1], rawbufs, var_vals)
@@ -211,7 +216,7 @@ if __name__ == "__main__":
           beam_time = pick_beam(opts)
           if DEBUG >= 1:
             for kk, tm in beam_time:
-              print(f"{tm:10.2f} ms from {len(opts):3d} actions", kk.colored_shape())
+              print(f"{tm:10.2f} ms ({gflops / tm * 1000:6.0f} gflops), from {len(opts):3d} actions", kk.colored_shape())
           beam = [x[0] for x in beam_time]
         lin = beam[0]
         if not getenv("SA"): global_db[str(lin.ast)] = lin.applied_opts
@@ -231,9 +236,10 @@ if __name__ == "__main__":
         best_lin, best_time = beam_time[0]
         sa_set = [(deepcopy(lin), tm) for lin, tm in beam_time] * (getenv("SA") // getenv("BEAM"))
         #temps = [2] * 8 + [1] * 7
-        temps = [2] * 8 + [1] * 2
-        #temps = [3] * 2 + [2] * 4 + [1] * 2
-        gflops = sym_infer(best_lin.info.flops, var_vals) * 1e-9
+        #temps = [2] * 8 + [1] * 2
+        #temps = [3] * 2 + [2] * 6 + [1] * 2
+        temps = [2, 3, 2, 3, 2, 3, 2, 1]
+        #temps = [2, 2, 2, 3, 1, 3, 1, 3, 1]
         run_cache = {}
         random.seed(1337)
         for greedy_i, temp in enumerate(temps):
