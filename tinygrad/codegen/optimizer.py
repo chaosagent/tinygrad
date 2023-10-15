@@ -300,14 +300,14 @@ class OptimizedKernel(Kernel):
         return True
     return False
 
-  def apply_opt(self, opt:Opt):
+  def apply_opt(self, opt:Opt, simplify=True):
     #assert opt.axis < self.first_reduce-self.local_dims or self.first_reduce + len(self.group_for_reduce) <= opt.axis < len(self.full_unupcasted_shape)
     #if opt.op in [OptOps.GROUP, OptOps.GROUPTOP]: assert opt.axis >= self.first_reduce + len(self.group_for_reduce)
     #if opt.op in [OptOps.LOCAL]: assert opt.axis < self.first_reduce-self.local_dims
 
     self.applied_opts.append(opt)
-    axis = opt.axis + (self.first_reduce if opt.op in [OptOps.UNROLL, OptOps.GROUP, OptOps.GROUPTOP] else 0)
-    axis = axis + (len(self.group_for_reduce) if opt.op in [OptOps.GROUP, OptOps.GROUPTOP] else 0)
+    axis = opt.axis + (self.first_reduce + len(self.group_for_reduce) if opt.op in [OptOps.UNROLL, OptOps.GROUP, OptOps.GROUPTOP] else 0)
+    #axis = axis + (len(self.group_for_reduce) if opt.op in [OptOps.GROUP, OptOps.GROUPTOP] else 0)
     assert self.full_shape[axis] % opt.amt == 0, "no longer valid shift"
     if opt.op == OptOps.LOCAL:        # cyan
       assert axis < (self.first_reduce-self.local_dims), "can't local a local or reduce"
@@ -327,7 +327,7 @@ class OptimizedKernel(Kernel):
       assert axis < self.first_reduce, "upcast is for non-reduce"
       self.shift_to(axis, opt.amt, insert_before=None)
       self.upcast()
-    self.simplify_ones()
+    if simplify: self.simplify_ones()
 
   def required_optimizations(self, early_only=False):
     for buf_index,buf in enumerate(self.bufs):
