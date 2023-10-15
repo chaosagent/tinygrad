@@ -73,9 +73,11 @@ class CUDAProgram:
         print(subprocess.check_output(['nvdisasm', fn]).decode('utf-8'))
       except Exception as e: print("failed to generate SASS", str(e))
     # TODO: name is wrong, so we get it from the ptx using hacks
-    self.prg, self.shared = cuda.module_from_buffer(prg.encode('utf-8')).get_function(prg.split(".visible .entry ")[1].split("(")[0]), shared
+    self.prg_code = prg
+    self.shared = shared
 
   def __call__(self, global_size, local_size, *args, wait=False):
+    self.prg = cuda.module_from_buffer(self.prg_code.encode('utf-8')).get_function(self.prg_code.split(".visible .entry ")[1].split("(")[0])
     if wait:
       start, end = cuda.Event(), cuda.Event()
       start.record()
@@ -88,7 +90,7 @@ class CUDAProgram:
 renderer = functools.partial(uops_to_cstyle, CStyleLanguage(
   kernel_prefix = "__global__ ", smem_prefix = "__shared__ ", arg_int_prefix = "const int", barrier = "__syncthreads();", float4 = "make_float4",
   gid = [f'blockIdx.{chr(120+i)}' for i in range(3)],
-  lid = [f'threadIdx.{chr(120+i)}' for i in range(3)],
+  lid = [f'threadIdx.{chr(120+i)}' for i in range(3)], launch_bounds=True,
   half_prekernel = """
     #include <cuda_fp16.h>
     struct __align__(8) half4 {

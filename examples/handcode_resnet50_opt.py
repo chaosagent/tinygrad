@@ -12,6 +12,7 @@ from tinygrad.lazy import vars_from_ast
 from tinygrad.shape.symbolic import sym_infer
 from extra.optimization.kopt_ng import run_and_time, fix_opt_axes
 from extra.optimization.helpers import compile_kernel, start_compile, catch_exception
+from copy import deepcopy
 
 import shelve
 global_db = shelve.open("./greedy_cache")
@@ -25,7 +26,7 @@ def convert_parts(k, parts):
   return result
 
 def pick_beam(opts):
-  allow = 2
+  allow = getenv("BEAM_DIV", 2)
   locals = {}
   kept = []
   for lin, tm in opts:
@@ -36,9 +37,25 @@ def pick_beam(opts):
     kept.append((lin, tm))
   return kept[:getenv("BEAM")]
 
+def apply_parts(create_k, a):
+  k = create_k()
+  try:
+    [k.apply_opt(op, simplify=False) for op in convert_parts(k, a)]
+    k.partitions = a
+    k.simplify_ones()
+    assert prod(k.full_shape[k.shape_len - k.upcasted:k.shape_len]) <= 512, "too many upcasts!"
+    assert prod(k.full_shape[k.first_reduce - k.local_dims:k.first_reduce + len(k.group_for_reduce)]) <= 256, "too many locals!"
+    #assert prod(k.full_shape[k.first_reduce - k.local_dims:k.first_reduce + len(k.group_for_reduce)]) <= 128, "too many locals!"
+    return k
+  except Exception:
+    return None
+
+get_linearizer_actions_cache = {}
 def get_linearizer_actions(lin:Linearizer, create_k):
   if hasattr(lin, "partitions"): old_parts = lin.partitions
   else: old_parts = {}
+  if (lin.ast, str(old_parts)) in get_linearizer_actions_cache:
+    return get_linearizer_actions_cache[(lin.ast, str(old_parts))]
   actions = []
   fresh_k = create_k()
 
@@ -73,16 +90,9 @@ def get_linearizer_actions(lin:Linearizer, create_k):
   from copy import deepcopy
   acted_lins = {0:deepcopy(lin)}
   for i,a in enumerate(actions):
-    k = create_k()
-    try:
-      [k.apply_opt(op, simplify=False) for op in convert_parts(fresh_k, a)]
-      k.partitions = a
-      k.simplify_ones()
-      assert prod(k.full_shape[k.shape_len - k.upcasted:k.shape_len]) <= 512, "too many upcasts!"
-      assert prod(k.full_shape[k.first_reduce - k.local_dims:k.first_reduce + len(k.group_for_reduce)]) <= 256, "too many locals!"
-      acted_lins[i+1] = k
-    except Exception:
-      pass
+    k = apply_parts(create_k, a)
+    if k is not None: acted_lins[i + 1] = k
+  get_linearizer_actions_cache[(lin.ast, str(old_parts))] = acted_lins
   return acted_lins
 
 def apply_wino_upcast(self):
@@ -106,6 +116,12 @@ def apply_wino_upcast(self):
     assert isinstance(upcast_amt, int), "can only upcast ints"
     self.apply_opt(Opt(OptOps.UPCAST, axis, upcast_amt))
   return self
+
+import random
+def sa_step(lin, temp, create_k):
+  for _ in range(temp):
+    lin = random.choice(list(get_linearizer_actions(lin, create_k).values()))
+  return lin
 
 if __name__ == "__main__":
   mdl = ResNet50()
@@ -140,6 +156,11 @@ if __name__ == "__main__":
     # "linearize" the op into uops in different ways
     lins:List[Linearizer] = []
 
+    #lin = apply_parts(lambda: Linearizer(si.ast, device.linearizer_opts), {3: (8, 2), 2: (8, 1), 1: (2, 4)})
+    #print(lin.applied_opts)
+    #run_and_time(compile_kernel(lin, checks=False)[1], rawbufs, var_vals)
+    #exit(0)
+
     # always try hand coded opt
     lin = Linearizer(si.ast, device.linearizer_opts)
     lin.hand_coded_optimizations()
@@ -152,33 +173,84 @@ if __name__ == "__main__":
       lins.append(lin)
 
     # try a beam search
-    if getenv("BEAM"):
+    if getenv("BEAM") or (getenv("SA") and not str(('SA', lin.ast)) in global_db):
       lin = Linearizer(si.ast, device.linearizer_opts)
-      if str(lin.ast) in global_db:
+      if not getenv("SA") and str(lin.ast) in global_db:
         for ao in global_db[str(lin.ast)]:
           lin.apply_opt(ao, simplify=False)
         lin.simplify_ones()
         best_time = run_and_time(compile_kernel(lin)[1], rawbufs, var_vals)
+      elif getenv("SA") and str(("BEAMSA", lin.ast)) in global_db:
+        beam_time = global_db[str(("BEAMSA", lin.ast))]
+        best_time = beam_time[0][1]
       else:
         apply_wino_upcast(lin)
         best_time = float('inf')
         beam = [lin]
-        for greedy_i in range(15):
+        beam_time = [(lin, float('inf'))]
+        for greedy_i in range(2 if getenv("SA") else 15):
           acted_lins = flatten([get_linearizer_actions(lin, lambda: Linearizer(si.ast, device.linearizer_opts)).items() for lin in beam])
-          compiling = [(lin, start_compile(pool, lin)) for i, lin in acted_lins if i != 0]
-          timed_lins = [(lin, catch_exception(lambda: run_and_time(prg.get(timeout=5)[1], rawbufs, var_vals, baseline=best_time), on_fail=float('inf'))()) for lin, prg in tqdm(compiling, desc=f'greedy layer {greedy_i}', disable=DEBUG < 1)]
+          compiling = [(lin, start_compile(pool, deepcopy(lin))) for i, lin in acted_lins if i != 0]
+          timed_lins = [(lin, catch_exception(lambda: run_and_time(prg.get(timeout=5)[1], rawbufs, var_vals, baseline=best_time), on_fail=float('inf'))()) for lin, prg in tqdm(compiling, desc=f'greedy layer {greedy_i}', disable=DEBUG != 1)]
           opts = sorted(timed_lins, key=lambda x: x[1])
           if len(opts) == 0 or best_time <= opts[0][1]: break   # we are done
           best_time = opts[0][1]
-          beam = pick_beam(opts)
+          beam_time = pick_beam(opts)
           if DEBUG >= 1:
-            for kk, tm in beam:
+            for kk, tm in beam_time:
               print(f"{tm:10.2f} ms from {len(opts):3d} actions", kk.colored_shape())
-          beam = [x[0] for x in beam]
+          beam = [x[0] for x in beam_time]
         lin = beam[0]
-        global_db[str(lin.ast)] = lin.applied_opts
+        if not getenv("SA"): global_db[str(lin.ast)] = lin.applied_opts
+        else: global_db[str(("BEAMSA", lin.ast))] = beam_time
       lins.append(lin)
       baseline = min(baseline, best_time)
+    if getenv("SA"):
+      lin = Linearizer(si.ast, device.linearizer_opts)
+      if str(('SA', lin.ast)) in global_db:
+        for ao in global_db[str(('SA', lin.ast))]:
+          lin.apply_opt(ao, simplify=False)
+        lin.simplify_ones()
+        best_time = run_and_time(compile_kernel(lin)[1], rawbufs, var_vals)
+      else:
+        #apply_wino_upcast(lin)
+        #raw_baseline = run_and_time(compile_kernel(deepcopy(lin), checks=False)[1], rawbufs, var_vals)
+        best_lin, best_time = beam_time[0]
+        sa_set = [(deepcopy(lin), tm) for lin, tm in beam_time] * (getenv("SA") // getenv("BEAM"))
+        #temps = [2] * 8 + [1] * 7
+        #temps = [2] * 4 + [1] * 2
+        temps = [3] * 2 + [2] * 4 + [1] * 2
+        gflops = sym_infer(best_lin.info.flops, var_vals) * 1e-9
+        run_cache = {}
+        random.seed(1337)
+        for greedy_i, temp in enumerate(temps):
+          acted_lins = [((k, tm), sa_step(k, temp, lambda: Linearizer(si.ast, device.linearizer_opts))) for k, tm in sa_set]
+          compiling = [(k, lin, start_compile(pool, deepcopy(lin))) for k, lin in acted_lins]
+          timed_lins = []
+          for k, lin, prg in tqdm(compiling, desc=f'SA layer {greedy_i} (temp {temp})', disable=DEBUG != 1):
+            if str(lin.partitions) not in run_cache:
+              try:
+                name, prg = prg.get(timeout=5)
+                tm = run_and_time(prg, rawbufs, var_vals, baseline=best_time)
+              except Exception:
+                tm = float('inf')
+              #tm = catch_exception(lambda: run_and_time(prg.get(timeout=5)[1], rawbufs, var_vals, baseline=best_time), on_fail=float('inf'))()
+              run_cache[str(lin.partitions)] = tm
+            timed_lins.append((k, lin, run_cache[str(lin.partitions)]))
+          winning_lins = [(k, ktm) if ktm < lintm else (lin, lintm) for (k, ktm), lin, lintm in timed_lins]
+          winning_lins = sorted(winning_lins, key=lambda x: x[1])
+          if winning_lins[0][1] < best_time:
+            best_lin, best_time = winning_lins[0]
+          if DEBUG >= 1:
+            for kk, tm in winning_lins[:8]:
+              print(f"{tm:10.2f} ms ({gflops / tm * 1000:6.0f} gflops)", kk.colored_shape())
+          sa_set = winning_lins
+          #sa_set = winning_lins[:len(winning_lins)/2] * 2
+        lin, best_time = sa_set[0]
+        global_db[str(('SA', lin.ast))] = lin.applied_opts
+      lins.append(lin)
+      baseline = min(baseline, best_time)
+
     if getenv("KOPT"):
       if str(('KOPT', si.ast)) in global_db:
         ng_choice = global_db[str(('KOPT', si.ast))]
