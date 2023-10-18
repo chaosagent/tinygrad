@@ -26,8 +26,7 @@ def convert_parts(k, parts):
     if local > 1: result.append(Opt(OptOps.GROUP if axis >= k.first_reduce else OptOps.LOCAL, axis_, local))
   return result
 
-def pick_beam(opts):
-  allow = getenv("BEAM_DIV", 2)
+def pick_beam(opts, allow=getenv("BEAM_DIV", 2)):
   locals = {}
   seen = set()
   kept = []
@@ -137,6 +136,8 @@ def sa_step(lin, fresh_lin, temp):
 def sa_step_(arg):
   return sa_step(*arg)
 
+
+
 if __name__ == "__main__":
   mdl = ResNet50()
   seen = set()
@@ -170,10 +171,10 @@ if __name__ == "__main__":
     # "linearize" the op into uops in different ways
     lins:List[Linearizer] = []
 
-    #lin = apply_parts(Linearizer(si.ast, device.linearizer_opts), {3: (8, 2), 2: (8, 1), 1: (2, 4)})
-    #print(lin.applied_opts)
-    #run_and_time(compile_kernel(lin, checks=False)[1], rawbufs, var_vals)
-    #exit(0)
+    lin = apply_parts(Linearizer(si.ast, device.linearizer_opts), {3: (8, 2), 2: (8, 1), 1: (2, 4)})
+    print(lin.applied_opts)
+    run_and_time(compile_kernel(lin, checks=False)[1], rawbufs, var_vals)
+    exit(0)
 
     # always try hand coded opt
     lin = Linearizer(si.ast, device.linearizer_opts)
@@ -190,6 +191,53 @@ if __name__ == "__main__":
     #fig = plt.figure()
     #ax = fig.add_subplot()
 
+    def beam_pass(beam_time, best_lin):
+      best_lin, best_time = best_lin
+      acted_lins = flatten([get_linearizer_actions(lin, lambda: Linearizer(si.ast, device.linearizer_opts)).items() for lin, _ in beam_time])
+      compiling = [(lin, start_compile(pool, deepcopy(lin))) for i, lin in acted_lins if i != 0]
+      timed_lins = [(lin, catch_exception(lambda: run_and_time(prg.get(timeout=5)[1], rawbufs, var_vals, baseline=best_time), on_fail=float('inf'))()) for lin, prg in tqdm(compiling, desc=f'greedy layer {greedy_i}', disable=DEBUG != 1)]
+      opts = sorted(timed_lins, key=lambda x: x[1])
+      if opts[0][1] < best_time:
+        best_lin, best_time = opts[0]
+      beam_time = pick_beam(opts)
+      if DEBUG >= 1:
+        for kk, tm in beam_time[:4]:
+          print(f"{tm:10.2f} ms ({gflops / tm * 1000:6.0f} gflops), from {len(opts):3d} actions", kk.colored_shape())
+      return beam_time, (best_lin, best_time)
+
+
+    def sa_pass(sa_set, best_lin, run_cache):
+      best_lin, best_time = best_lin
+      sa_step_args = zip([k for k, _ in sa_set], [Linearizer(si.ast, device.linearizer_opts) for _ in sa_set], [temp for _ in sa_set])
+      sa_steps = pool.map(sa_step_, sa_step_args)
+      acted_lins = zip(sa_set, sa_steps)
+      compiling = [(k, lin, start_compile(pool, deepcopy(lin))) for k, lin in acted_lins]
+      timed_lins = []
+      for k, lin, prg in tqdm(compiling, desc=f'SA layer {greedy_i} (temp {temp})', disable=DEBUG != 1):
+        if str(lin.partitions) not in run_cache:
+          try:
+            name, prg = prg.get(timeout=5)
+            tm = run_and_time(prg, rawbufs, var_vals, baseline=best_time)
+          except Exception:
+            tm = float('inf')
+          # tm = catch_exception(lambda: run_and_time(prg.get(timeout=5)[1], rawbufs, var_vals, baseline=best_time), on_fail=float('inf'))()
+          run_cache[str(lin.partitions)] = tm
+        timed_lins.append((k, lin, run_cache[str(lin.partitions)]))
+      winning_lins = [(k, ktm) if ktm < lintm else (lin, lintm) for (k, ktm), lin, lintm in timed_lins]
+      # ax.hist([tm for k, tm in winning_lins])
+      # plt.show(block=False)
+      winning_lins = sorted(winning_lins, key=lambda x: x[1])
+      if DEBUG >= 1:
+        ranks = list(range(8)) + [15, 31, 63, 127, 255, 511, 767]
+        for rank, (kk, tm) in zip(ranks, [winning_lins[i] for i in ranks]):
+          print(f"rank {rank} {tm:10.2f} ms ({gflops / tm * 1000:6.0f} gflops)", kk.colored_shape())
+      if winning_lins[0][1] < best_time:
+        best_lin, best_time = winning_lins[0]
+      sa_set = winning_lins
+      # sa_set = winning_lins[:len(winning_lins)//2] * 2
+      return sa_set, (best_lin, best_time)
+
+
     # try a beam search
     if getenv("BEAM") or (getenv("SA") and not str(('SA', lin.ast)) in global_db):
       lin = Linearizer(si.ast, device.linearizer_opts)
@@ -200,25 +248,17 @@ if __name__ == "__main__":
         best_time = run_and_time(compile_kernel(lin)[1], rawbufs, var_vals)
       elif getenv("SA") and str(("BEAMSA", lin.ast)) in global_db:
         beam_time = global_db[str(("BEAMSA", lin.ast))]
-        best_time = beam_time[0][1]
+        best_lin = beam_time[0]
+        best_time = best_lin[1]
       else:
         apply_wino_upcast(lin)
-        best_time = float('inf')
-        beam = [lin]
+        best_lin = (lin, float('inf'))
         beam_time = [(lin, float('inf'))]
         for greedy_i in range(2 if getenv("SA") else 15):
-          acted_lins = flatten([get_linearizer_actions(lin, lambda: Linearizer(si.ast, device.linearizer_opts)).items() for lin in beam])
-          compiling = [(lin, start_compile(pool, deepcopy(lin))) for i, lin in acted_lins if i != 0]
-          timed_lins = [(lin, catch_exception(lambda: run_and_time(prg.get(timeout=5)[1], rawbufs, var_vals, baseline=best_time), on_fail=float('inf'))()) for lin, prg in tqdm(compiling, desc=f'greedy layer {greedy_i}', disable=DEBUG != 1)]
-          opts = sorted(timed_lins, key=lambda x: x[1])
-          if len(opts) == 0 or best_time <= opts[0][1]: break   # we are done
-          best_time = opts[0][1]
-          beam_time = pick_beam(opts)
-          if DEBUG >= 1:
-            for kk, tm in beam_time:
-              print(f"{tm:10.2f} ms ({gflops / tm * 1000:6.0f} gflops), from {len(opts):3d} actions", kk.colored_shape())
-          beam = [x[0] for x in beam_time]
-        lin = beam[0]
+          beam_time, new_best_lin = beam_pass(beam_time, best_lin)
+          if new_best_lin[1] >= best_lin[1]: break
+          best_lin = new_best_lin
+        lin, best_time = best_lin
         if not getenv("SA"): global_db[str(lin.ast)] = lin.applied_opts
         else: global_db[str(("BEAMSA", lin.ast))] = beam_time
       lins.append(lin)
@@ -233,44 +273,20 @@ if __name__ == "__main__":
       else:
         #apply_wino_upcast(lin)
         #raw_baseline = run_and_time(compile_kernel(deepcopy(lin), checks=False)[1], rawbufs, var_vals)
-        best_lin, best_time = beam_time[0]
         sa_set = [(deepcopy(lin), tm) for lin, tm in beam_time] * (getenv("SA") // getenv("BEAM"))
         #temps = [2] * 8 + [1] * 7
         #temps = [2] * 8 + [1] * 2
         #temps = [3] * 2 + [2] * 6 + [1] * 2
-        temps = [2, 3, 2, 3, 2, 3, 2, 1]
+        temps = [2, 3, 2, 3, 2, 3, 2, 2]
         #temps = [2, 2, 2, 3, 1, 3, 1, 3, 1]
         run_cache = {}
         random.seed(1337)
         for greedy_i, temp in enumerate(temps):
-          sa_step_args = zip([k for k, _ in sa_set], [Linearizer(si.ast, device.linearizer_opts) for _ in sa_set], [temp for _ in sa_set])
-          sa_steps = pool.map(sa_step_, sa_step_args)
-          acted_lins = zip(sa_set, sa_steps)
-          compiling = [(k, lin, start_compile(pool, deepcopy(lin))) for k, lin in acted_lins]
-          timed_lins = []
-          for k, lin, prg in tqdm(compiling, desc=f'SA layer {greedy_i} (temp {temp})', disable=DEBUG != 1):
-            if str(lin.partitions) not in run_cache:
-              try:
-                name, prg = prg.get(timeout=5)
-                tm = run_and_time(prg, rawbufs, var_vals, baseline=best_time)
-              except Exception:
-                tm = float('inf')
-              #tm = catch_exception(lambda: run_and_time(prg.get(timeout=5)[1], rawbufs, var_vals, baseline=best_time), on_fail=float('inf'))()
-              run_cache[str(lin.partitions)] = tm
-            timed_lins.append((k, lin, run_cache[str(lin.partitions)]))
-          winning_lins = [(k, ktm) if ktm < lintm else (lin, lintm) for (k, ktm), lin, lintm in timed_lins]
-          #ax.hist([tm for k, tm in winning_lins])
-          #plt.show(block=False)
-          winning_lins = sorted(winning_lins, key=lambda x: x[1])
-          if winning_lins[0][1] < best_time:
-            best_lin, best_time = winning_lins[0]
-          if DEBUG >= 1:
-            ranks = list(range(8)) + [15, 31, 63, 127, 255, 511, 767]
-            for rank, (kk, tm) in zip(ranks, [winning_lins[i] for i in ranks]):
-              print(f"rank {rank} {tm:10.2f} ms ({gflops / tm * 1000:6.0f} gflops)", kk.colored_shape())
-          sa_set = winning_lins
-          #sa_set = winning_lins[:len(winning_lins)//2] * 2
-        lin, best_time = sa_set[0]
+          sa_set, best_line = sa_pass(sa_set, best_lin, run_cache)
+        sa_set = pick_beam(sa_set, 8)
+        for _ in range(2):
+          sa_set, best_lin = beam_pass(sa_set, best_lin)
+        lin, best_time = best_lin
         global_db[str(('SA', lin.ast))] = lin.applied_opts
       lins.append(lin)
       baseline = min(baseline, best_time)
