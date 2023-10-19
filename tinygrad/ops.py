@@ -178,6 +178,14 @@ class ASTRunner:
     if DEBUG >= 4 and (runtime_args is None or 'binary' not in runtime_args or not runtime_args['binary']): print(prg)
     self.name, self.prg, self.global_size, self.local_size, self.op_estimate, self.mem_estimate, self.display_name, self.runtime_args = name, prg, global_size, local_size, op_estimate, mem_estimate, display_name, runtime_args if runtime_args is not None else {}
 
+  def to_tuple(self):
+    return (self.name, self.prg, self.global_size, self.local_size, self.op_estimate, self.mem_estimate, self.display_name, self.runtime_args)
+
+  @classmethod
+  def from_tuple(cls, binary):
+    name, prg, global_size, local_size, op_estimate, mem_estimate, display_name, runtime_args = binary
+    return cls(name, prg, global_size, local_size, op_estimate, mem_estimate, display_name, runtime_args)
+
   def optimize_local_size(self, global_size, rawbufs) -> List[int]:
     assert self.global_size is not None, "needs a global size to optimize local size"
     MAX_WORKGROUP = self.clprg.max_work_group_size() if hasattr(self.clprg, 'max_work_group_size') else 1024
@@ -220,10 +228,15 @@ class ASTRunner:
     GlobalCounters.global_mem += self.mem_estimate
     return et
 
+
+import shelve
+
+
 class Compiled:
   def __init__(self, buffer: Type[RawBuffer], linearizer_opts, renderer, runtime, synchronize=lambda: None, batch_exec=BasicBatchExecutor):
     self.buffer, self.linearizer_opts, self.renderer, self.runtime, self.synchronize, self.batch_exec = buffer, linearizer_opts, renderer, runtime, synchronize, batch_exec
     self.method_cache: Dict[LazyOp, ASTRunner] = {}
+    self.global_db = shelve.open(getenv("KOPT_CACHE", "./greedy_cache"))
 
   def to_program(self, k):
     k.linearize()
@@ -268,19 +281,41 @@ class Compiled:
       if not getenv("NOOPT"):
         if not k.apply_tensor_cores(getenv("TC", 1)): k.hand_coded_optimizations()
         if BEAM:
-          kb = Linearizer(ast, self.linearizer_opts)
-          kb.required_optimizations()
-          kb.dont_use_locals = bool(getenv("NOLOCALS"))
-          from tinygrad.features.search import beam_search, time_linearizer
-          kb = beam_search(kb, rawbuffers, BEAM.value)
-          baseline, beamtime = time_linearizer(k, rawbuffers, allow_test_size=False, disable_cache=True), time_linearizer(kb, rawbuffers, allow_test_size=False, disable_cache=True)
-          if beamtime < baseline:
-            if DEBUG >= 1: print(f"beam search {beamtime*1e6:<12.2f} beat baseline {baseline*1e6:<12.2f} by {baseline/beamtime:.2f}x")
-            k = kb
+          if str(ast) in self.global_db:
+            saved_opt = self.global_db[str(ast)]
+            if DEBUG >= 2: print(f"from cache: {saved_opt}")
+            if saved_opt != 'BASELINE':
+              kb = Linearizer(ast, self.linearizer_opts)
+              kb.required_optimizations()
+              kb.dont_use_locals = bool(getenv("NOLOCALS"))
+              for op in saved_opt: kb.apply_opt(op, simplify=False)
+              kb.simplify_ones()
+              k = kb
+          else:
+            kb = Linearizer(ast, self.linearizer_opts)
+            kb.required_optimizations()
+            kb.dont_use_locals = bool(getenv("NOLOCALS"))
+            from tinygrad.features.search import beam_search, time_linearizer
+            kb = beam_search(kb, rawbuffers, BEAM.value)
+            baseline, beamtime = time_linearizer(k, rawbuffers, allow_test_size=False, disable_cache=True, cnt=10), time_linearizer(kb, rawbuffers, allow_test_size=False, disable_cache=True, cnt=10)
+            if DEBUG >= 1: print(f"beam search {beamtime * 1e6:<12.2f} vs baseline {baseline * 1e6:<12.2f} : {baseline / beamtime:.2f}x")
+            if beamtime < baseline:
+              k = kb
+              self.global_db[str(ast)] = kb.applied_opts
+            else:
+              self.global_db[str(ast)] = 'BASELINE'
+          self.global_db.sync()
       return self.to_program(k)
 
     if getenv("ENABLE_METHOD_CACHE", 1):
-      if ast not in self.method_cache: self.method_cache[ast] = get_program()
+      if ast not in self.method_cache:
+        if str(('compiled', ast)) not in self.global_db:
+          prg = get_program()
+          self.global_db[str(('compiled', ast))] = prg.to_tuple()
+          self.method_cache[ast] = prg
+        else:
+          prg_tuple = self.global_db[str(('compiled', ast))]
+          self.method_cache[ast] = ASTRunner.from_tuple(prg_tuple).build(self.runtime, self.batch_exec)
       prg = self.method_cache[ast]
     else:
       prg = get_program()

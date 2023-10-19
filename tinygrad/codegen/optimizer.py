@@ -1,6 +1,5 @@
 from __future__ import annotations
-from typing import Tuple, List, cast, Optional
-from dataclasses import dataclass
+from typing import Tuple, List, cast, Optional, NamedTuple
 import itertools, math, os
 from tinygrad.helpers import DEBUG, prod, getenv, ImageDType, dtypes
 from tinygrad.ops import ReduceOps, BinaryOps, UnaryOps, LazyOp, BufferOps
@@ -13,8 +12,7 @@ class OptOps(Enum):
   UPCAST = auto(); UNROLL = auto(); LOCAL = auto(); LASTLOCAL = auto(); GROUP = auto(); GROUPTOP = auto() # noqa: E702
   def __lt__(self, x:OptOps): return self.value < x.value
 
-@dataclass(frozen=True, order=True)
-class Opt:
+class Opt(NamedTuple):
   op: OptOps
   axis: int
   amt: int
@@ -280,26 +278,27 @@ class OptimizedKernel(Kernel):
         return True
     return False
 
-  def apply_opt(self, opt:Opt):
+  def apply_opt(self, opt:Opt, simplify=True):
     self.applied_opts.append(opt)
-    axis = opt.axis + (self.first_reduce if opt.op == OptOps.UNROLL else 0)
+    axis = opt.axis + (self.first_reduce + len(self.group_for_reduce) if opt.op in [OptOps.UNROLL, OptOps.GROUP, OptOps.GROUPTOP] else 0)
     amt = opt.amt if opt.amt != 0 else self.full_shape[axis]
     assert self.full_shape[axis] % amt == 0, "no longer valid shift"
     assert isinstance(amt, int) and amt != 1, "shift of amt 1 or Node is meaningless"
     if opt.op == OptOps.LOCAL:        # cyan
       assert axis < self.first_reduce, "can't local a reduce"
-      self.shift_to(axis, amt, insert_before=self.first_reduce)
+      self.shift_to(axis, amt, insert_before=self.first_reduce-self.local_dims + self.local_dims_fixed)
       self.local_dims += 1
     elif opt.op == OptOps.LASTLOCAL:        # cyan
       assert axis < self.first_reduce, "can't local a reduce"
       self.shift_to(axis, amt, insert_before=self.first_reduce-self.local_dims)
       self.local_dims += 1
+      self.local_dims_fixed += 1
       # TOOD: include exclude_local_upcast here
     elif opt.op == OptOps.GROUP:      # green
-      self.shift_to(axis, amt, insert_before=self.first_reduce + len(self.group_for_reduce))
+      self.shift_to(axis, amt, insert_before=self.first_reduce)
       self.group_for_reduce.append(amt)
     elif opt.op == OptOps.GROUPTOP:   # green
-      self.shift_to(axis, amt, top=True, insert_before=self.first_reduce + len(self.group_for_reduce))
+      self.shift_to(axis, amt, top=True, insert_before=self.first_reduce)
       self.group_for_reduce.append(amt)
     elif opt.op == OptOps.UNROLL:     # purple
       assert axis < self.shape_len-self.upcasted, "can't upcasted already upcasted"
@@ -311,7 +310,7 @@ class OptimizedKernel(Kernel):
       assert amt <= 8, "don't upcast more than 8"
       self.shift_to(axis, amt, insert_before=None)
       self.upcast()
-    return self.simplify_ones()
+    return self.simplify_ones() if simplify else False
 
   def required_optimizations(self, early_only=False):
     for buf_index,buf in enumerate(self.bufs):
@@ -322,7 +321,7 @@ class OptimizedKernel(Kernel):
           if unit_stride_axes_mul_4[0] < self.first_reduce:
             self.apply_opt(Opt(OptOps.UPCAST, unit_stride_axes_mul_4[0], 4))
           else:
-            self.apply_opt(Opt(OptOps.UNROLL, unit_stride_axes_mul_4[0]-self.first_reduce, 4))
+            self.apply_opt(Opt(OptOps.UNROLL, unit_stride_axes_mul_4[0]-self.first_reduce-len(self.group_for_reduce), 4))
 
   def hand_coded_optimizations(self):
     # if there's images in the earlybufs, we have to make an axis the 4 loading one
@@ -344,7 +343,7 @@ class OptimizedKernel(Kernel):
           if self.full_shape[self.first_reduce]%MV_THREADS_PER_ROW == 0 and self.full_shape[global_idx]%(MV_BLOCKSIZE*MV_ROWS_PER_THREAD) == 0:
             if DEBUG >= 3: print(f"MATVEC: full_shape={self.full_shape} first_reduce={self.first_reduce} buf0_strides={buf0_strides} blocksize={MV_BLOCKSIZE} threads_per_row={MV_THREADS_PER_ROW} rows_per_thread{MV_ROWS_PER_THREAD}")
             if MV_THREADS_PER_ROW > 1:
-              self.apply_opt(Opt(OptOps.GROUP, self.first_reduce, MV_THREADS_PER_ROW))
+              self.apply_opt(Opt(OptOps.GROUP, 0, MV_THREADS_PER_ROW))
             if MV_BLOCKSIZE > 1:
               self.apply_opt(Opt(OptOps.LOCAL, global_idx, MV_BLOCKSIZE))
             if MV_ROWS_PER_THREAD > 1:
@@ -357,7 +356,7 @@ class OptimizedKernel(Kernel):
         # TODO: use 1024 if it's allowed in a smarter way
         for sz in (([256, 16]) if prod(self.sts[0].shape[:self.first_reduce]) <= 32 else [16]):
           if all(st.shape[self.first_reduce] % sz == 0 or st.shape[self.first_reduce] == 1 for st in self.sts):
-            self.apply_opt(Opt(OptOps.GROUPTOP, self.first_reduce + len(self.group_for_reduce), sz))
+            self.apply_opt(Opt(OptOps.GROUPTOP, 0, sz))
             break
 
       # are we upcasting in mid reduce? (only for images)
@@ -365,7 +364,7 @@ class OptimizedKernel(Kernel):
         axes = self.sts[0].unit_stride_axes()
         assert len(axes) == 1, f"wrong number of stride 1 axis : {axes}"
         if self.sts[0].shape[axes[0]]%4 == 0:
-          self.apply_opt(Opt(OptOps.GROUP, axes[0], 4))
+          self.apply_opt(Opt(OptOps.GROUP, axes[0] - self.first_reduce - len(self.group_for_reduce), 4))
 
     # now do everything required
     self.required_optimizations()

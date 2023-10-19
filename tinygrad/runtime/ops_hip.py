@@ -94,11 +94,7 @@ class HIPProgram:
       asm = early_exec((["/opt/rocm/llvm/bin/llvm-objdump", '-d', '-'], prg))
       print('\n'.join([x for x in asm.decode('utf-8').split("\n") if 's_code_end' not in x]))
 
-    self.modules, self.prgs = [], []
-    for i in range(HIP.device_count):
-      hip.hipSetDevice(i)
-      self.modules.append(hip.hipModuleLoadData(prg))
-      self.prgs.append(hip.hipModuleGetFunction(self.modules[-1], name))
+    self.prg, self.name = prg, name
 
   @cache_compiled
   def compile(self, prg, name) -> bytes:
@@ -111,6 +107,13 @@ class HIPProgram:
       raise e
 
   def __call__(self, global_size, local_size, *args, wait=False):
+    if not hasattr(self, "modules"):
+      self.modules, self.prgs = [], []
+      for i in range(HIP.device_count):
+        hip.hipSetDevice(i)
+        self.modules.append(hip.hipModuleLoadData(self.prg))
+        self.prgs.append(hip.hipModuleGetFunction(self.modules[-1], self.name))
+
     hip.hipSetDevice(args[0]._device)
     if wait:
       start, end = hip.hipEventCreate(), hip.hipEventCreate()
@@ -125,7 +128,8 @@ class HIPProgram:
       return hip.hipEventElapsedTime(start, end)*1e-3
 
   def __del__(self):
-    for module in self.modules: hip.hipModuleUnload(module)
+    if hasattr(self, "modules"):
+      for module in self.modules: hip.hipModuleUnload(module)
 
 renderer = functools.partial(uops_to_cstyle, CStyleLanguage(
   kernel_prefix = "#include <hip/hip_common.h>\n#define INFINITY (__builtin_inff())\n#define NAN (__builtin_nanf(\"\"))" + """

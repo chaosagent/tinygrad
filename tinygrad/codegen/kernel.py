@@ -77,6 +77,7 @@ class Kernel:
     self.group_for_reduce: List[int] = []
     self.upcasted: int = 0
     self.local_dims: int = 0
+    self.local_dims_fixed = 0
     self.local_alias: Dict[int, LocalBuffer] = {}
     self.use_tensor_cores: bool = False
     self.exclude_local_upcast: int = 0
