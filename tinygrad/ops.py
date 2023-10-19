@@ -236,7 +236,7 @@ class Compiled:
   def __init__(self, buffer: Type[RawBuffer], linearizer_opts, renderer, runtime, synchronize=lambda: None, batch_exec=BasicBatchExecutor):
     self.buffer, self.linearizer_opts, self.renderer, self.runtime, self.synchronize, self.batch_exec = buffer, linearizer_opts, renderer, runtime, synchronize, batch_exec
     self.method_cache: Dict[LazyOp, ASTRunner] = {}
-    self.global_db = shelve.open(getenv("KOPT_CACHE", "./greedy_cache"))
+    self.global_db = shelve.open(getenv("KOPT_CACHE", "./greedy_cache"), flag='r' if getenv("CACHE_RO") else 'c')
 
   def to_program(self, k):
     k.linearize()
@@ -291,7 +291,7 @@ class Compiled:
               for op in saved_opt: kb.apply_opt(op, simplify=False)
               kb.simplify_ones()
               k = kb
-          else:
+          elif not getenv("CACHE_RO", 0):
             kb = Linearizer(ast, self.linearizer_opts)
             kb.required_optimizations()
             kb.dont_use_locals = bool(getenv("NOLOCALS"))
@@ -304,15 +304,16 @@ class Compiled:
               self.global_db[str(ast)] = kb.applied_opts
             else:
               self.global_db[str(ast)] = 'BASELINE'
-          self.global_db.sync()
+          if not getenv("CACHE_RO"): self.global_db.sync()
       return self.to_program(k)
 
     if getenv("ENABLE_METHOD_CACHE", 1):
       if ast not in self.method_cache:
         if str(('compiled', ast)) not in self.global_db:
           prg = get_program()
-          self.global_db[str(('compiled', ast))] = prg.to_tuple()
+          if not getenv("CACHE_RO"): self.global_db[str(('compiled', ast))] = prg.to_tuple()
           self.method_cache[ast] = prg
+          if not getenv("CACHE_RO"): self.global_db.sync()
         else:
           prg_tuple = self.global_db[str(('compiled', ast))]
           self.method_cache[ast] = ASTRunner.from_tuple(prg_tuple).build(self.runtime, self.batch_exec)
