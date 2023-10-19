@@ -303,6 +303,8 @@ def train_cifar():
   loss_batchsize_scaler = 512/BS
   @TinyJit
   def train_step_jitted(model, optimizer, lr_scheduler, X, Y):
+    if getenv("DIST"):
+      X, Y = X.chunk(world_size, 0)[rank], Y.chunk(world_size, 0)[rank]
     out = model(X)
     loss = cross_entropy(out, Y, reduction='none' ,label_smoothing=hyp['opt']['label_smoothing']).mul(hyp['opt']['loss_scale_scaler']*loss_batchsize_scaler).sum().div(hyp['opt']['loss_scale_scaler'])
 
@@ -330,6 +332,9 @@ def train_cifar():
     return loss.realize()
 
   def eval_step(model, X, Y):
+    # further split batch if distributed
+    if getenv("DIST"):
+      X, Y = X.chunk(min(world_size, 5), 0)[min(rank, 4)], Y.chunk(min(world_size, 5), 0)[min(rank, 4)]
     out = model(X, training=False)
     loss = cross_entropy(out, Y, reduction='mean')
     correct = out.argmax(axis=1) == Y.argmax(axis=1)
@@ -361,10 +366,6 @@ def train_cifar():
         losses = []
         losses_ema = []
         for Xt, Yt in fetch_batches(X_test, Y_test, BS=EVAL_BS, is_train=False):
-          # further split batch if distributed
-          if getenv("DIST"):
-            Xt, Yt = Xt.chunk(min(world_size, 5), 0)[min(rank, 4)], Yt.chunk(min(world_size, 5), 0)[min(rank, 4)]
-
           correct, loss = eval_step_jitted(model, Xt, Yt)
           losses.append(loss.numpy().tolist())
           corrects.extend(correct.numpy().tolist())
@@ -403,8 +404,6 @@ def train_cifar():
 
       if STEPS == 0 or i==STEPS: break
       X, Y = next(batcher)
-      if getenv("DIST"):
-        X, Y = X.chunk(world_size, 0)[rank], Y.chunk(world_size, 0)[rank]
       GlobalCounters.reset()
       loss = train_step_jitted(model, [opt_bias, opt_non_bias], [lr_sched_bias, lr_sched_non_bias], X, Y)
       et = time.monotonic()
@@ -426,8 +425,9 @@ if __name__ == "__main__":
   if not getenv("DIST"):
     train_cifar()
   else: # distributed
-    from tinygrad.runtime.ops_gpu import CL
-    devices = [f"gpu:{i}" for i in range(len(CL.devices))]
+    # from tinygrad.runtime.ops_gpu import CL
+    # devices = [f"gpu:{i}" for i in range(len(CL.devices))]
+    devices = [f"hip:{i}" for i in range(6)]
     world_size = len(devices)
 
     # ensure that the batch size is divisible by the number of devices
