@@ -108,7 +108,7 @@ def train_cifar():
         'pad_amount': 2
     },
     'ema': {
-        'steps': 399,
+        'steps': 3990,
         'decay_base': .95,
         'decay_pow': 1.6,
         'every_n_steps': 5,
@@ -373,6 +373,9 @@ def train_cifar():
             correct_ema, loss_ema = eval_step_ema_jitted(model_ema.net_ema, Xt, Yt)
             losses_ema.append(loss_ema.numpy().tolist())
             corrects_ema.extend(correct_ema.numpy().tolist())
+          et_eval = time.monotonic()
+          print(f"Eval step {(et_eval-st_eval)*1000}ms")
+          st_eval = et_eval
 
         # collect accuracy across ranks
         correct_sum, correct_len = sum(corrects), len(corrects)
