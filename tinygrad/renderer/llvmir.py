@@ -1,4 +1,4 @@
-from typing import Final, Dict, Callable, Any, List, Optional
+from typing import Final, Dict, Callable, Any, List, Optional, Tuple
 from llvmlite import ir  # type: ignore
 from tinygrad.codegen.linearizer import UOps, UOp
 from tinygrad.helpers import dtypes
@@ -57,7 +57,7 @@ def cast(bb, val, input_type, output_type):
 
   raise NotImplementedError(f"cast from {input_type} -> {output_type} not implemented")
 
-def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> str:
+def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
   # all llvm stuff goes into a module
   module = ir.Module(name=__file__)
 
@@ -71,7 +71,7 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> str:
   for a in func.args:
     if a.type.is_pointer: a.add_attribute("noalias")
 
-  # force llvmlite to allow us to add function attribute then add the attribute
+  # add the function attribute "no-nans-fp-math"="true", which informs llvm that it allowed to use vectorization optimizations
   func.attributes._known = func.attributes._known.union(frozenset(['"no-nans-fp-math"="true"']))
   func.attributes.add('"no-nans-fp-math"="true"')
 
@@ -106,7 +106,7 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> str:
       lvars[vin[0]].add_incoming(idx_p1, bb[-1]._block)
       for n,phi in phis: phi.add_incoming(lvars[n], bb[-1]._block)
       bb.append(ir.IRBuilder(func.append_basic_block(f"loop_exit_{len(loop_blocks)}")))
-      bb[-2].cbranch(bb[-2].icmp_unsigned(">", idx_p1, lvars[vin[0].vin[1]]), bb[-1]._block, block._block)
+      bb[-2].cbranch(bb[-2].icmp_unsigned("<", idx_p1, lvars[vin[0].vin[1]]), block._block, bb[-1]._block)
     if uop == UOps.DEFINE_GLOBAL:
       lvars[u] = func.args[buf_index[args[0]]]
     if uop == UOps.DEFINE_ACC:
@@ -129,14 +129,17 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> str:
         val = bb[-1].load(bb[-1].gep(lvars[vin[0]], [lvars[vin[1]]], inbounds=True))
         val = cast(bb, val, vin[0].dtype, dtype)
       lvars[u] = val
+    if uop == UOps.PHI:
+      lvars[u] = lvars[vin[1]]
+      # PHI UOps can link to other PHI Uops, backtrace this to DEFINE_ACC
+      backward = vin[0]
+      while backward.uop == UOps.PHI: backward = backward.vin[0]
+      lvars[backward] = lvars[u]
     if uop == UOps.STORE:
-      if len(vin) == 2:
-        lvars[vin[0]] = lvars[vin[1]]
-      elif len(vin) == 3:
-        element = cast(bb, lvars[vin[2]], vin[2].dtype, vin[0].dtype)
-        bb[-1].store(element, bb[-1].gep(lvars[vin[0]], [lvars[vin[1]]], inbounds=True))
+      element = cast(bb, lvars[vin[2]], vin[2].dtype, vin[0].dtype)
+      bb[-1].store(element, bb[-1].gep(lvars[vin[0]], [lvars[vin[1]]], inbounds=True))
     if uop == UOps.ALU:
       lvars[u] = code_for_op[args](bb[-1], *[lvars[x] for x in vin])
 
   bb[-1].ret_void()
-  return str(module)
+  return str(module), {"binary":False}

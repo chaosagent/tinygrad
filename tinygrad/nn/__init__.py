@@ -51,7 +51,7 @@ class Conv2d:
     bound = 1 / math.sqrt(prod(self.weight.shape[1:]))
     self.bias = Tensor.uniform(out_channels, low=-bound, high=bound) if bias else None
 
-  def __call__(self, x):
+  def __call__(self, x:Tensor):
     return x.conv2d(self.weight, self.bias, padding=self.padding, stride=self.stride, dilation=self.dilation, groups=self.groups)
 
 def ConvTranspose1d(in_channels, out_channels, kernel_size, stride=1, padding=0, output_padding=0, dilation=1, groups=1, bias=True):
@@ -66,7 +66,7 @@ class ConvTranspose2d:
     bound = 1 / math.sqrt(prod(self.weight.shape[1:]))
     self.bias = Tensor.uniform(out_channels, low=-bound, high=bound) if bias else None
 
-  def __call__(self, x):
+  def __call__(self, x:Tensor):
     return x.conv_transpose2d(self.weight, self.bias, padding=self.padding, output_padding=self.output_padding, stride=self.stride, dilation=self.dilation, groups=self.groups)
 
 class Linear:
@@ -77,7 +77,7 @@ class Linear:
     bound = 1 / math.sqrt(self.weight.shape[1])
     self.bias = Tensor.uniform(out_features, low=-bound, high=bound) if bias else None
 
-  def __call__(self, x):
+  def __call__(self, x:Tensor):
     return x.linear(self.weight.transpose(), self.bias)
 
 class GroupNorm:

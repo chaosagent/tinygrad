@@ -4,11 +4,10 @@ try:
 except ImportError:
   nx = None # graph won't work
 from collections import defaultdict
-from typing import Dict, List, TYPE_CHECKING, Tuple, cast
-from tinygrad.ops import UnaryOps, BinaryOps, ReduceOps, MovementOps, LoadOps, BufferOps, TernaryOps, Op, OpType, LazyOp
-from tinygrad.helpers import GRAPH, GRAPHPATH, DEBUG, GlobalCounters
-
-if TYPE_CHECKING: from tinygrad.lazy import LazyBuffer
+from typing import Dict, List
+from tinygrad.ops import ScheduleItem, UnaryOps, BinaryOps, ReduceOps, MovementOps, LoadOps, BufferOps, TernaryOps, Op, OpType, LazyOp
+from tinygrad.helpers import GRAPH, GRAPHPATH, DEBUG, GlobalCounters, getenv, dedup
+from tinygrad.codegen.linearizer import UOps
 
 # **** debugging and graphing ****
 
@@ -40,35 +39,75 @@ def nm(x):
 def get_sop(op: List[Op]):
   op = [x for x in op if x not in BufferOps]
   if len(op) <= 2: return '.'.join([str(y).split(".")[1] for y in op][::-1])
-  if len(op) <= 4: return '.'.join([str(y).split(".")[1][0:3] for y in op][::-1])
+  if len(op) <= 6: return '.'.join([str(y).split(".")[1][0:3] for y in op][::-1])
   return str(len(op))
 
 def str_dtype(dtyp):
   ret = str(dtyp)[7:]
   return "" if ret == 'float' else f"\n{ret}"
 
-def log_schedule_item(iop: LazyOp, ret: 'LazyBuffer', inp: Tuple['LazyBuffer', ...]):
+logops = open(getenv("LOGOPS", ""),"a") if getenv("LOGOPS", "") else None
+def log_schedule_item(si: ScheduleItem):
+  global node_count
+  if logops and si.ast.op not in LoadOps: logops.write(str(si.ast)+"\n")
   show_graph = bool(GRAPH)
   if not DEBUG and not show_graph: return
-  if iop.op == LoadOps.CONTIGUOUS: setattr(ret, 'node_id', nm(cast('LazyBuffer', iop.src[0]).base))
-  if iop.op in {LoadOps.CONST, LoadOps.CONTIGUOUS}: return
+  if si.ast.op == LoadOps.CONTIGUOUS: setattr(si.out, 'node_id', nm(si.inputs[0].base))
+  if si.ast.op in {LoadOps.CONST, LoadOps.CONTIGUOUS}: return
 
-  op: List[Op] = [x.op for x in iop.get_lazyops()]
+  op: List[Op] = [x.op for x in si.ast.get_lazyops()]
   oporder = [LoadOps, TernaryOps, ReduceOps, BinaryOps, UnaryOps, MovementOps, BufferOps]
   optype = type(sorted(op, key=lambda x: oporder.index(type(x)))[0])
   cnts[optype] += 1
   if show_graph:
-    assert ret.base == ret, "all outputs based"
+    assert si.out.base == si.out, "all outputs based"
     top_colors = {LoadOps: '#FFFFa0', UnaryOps: "#c0c0c0", ReduceOps: "#8080ff", BinaryOps: "#c0c0c0", MovementOps: "#80ff80", TernaryOps: "#c0c0c0", BufferOps: '#FF8080'}
-    for x in inp:
-      assert x.base == x, "all inputs based"
-      #assert nm(x) in G.nodes, "all inputs seen"
-      G.add_edge(nm(x), nm(ret), label=get_sop(op), color='#00000060')
-      if 'label' not in G.nodes[nm(x)]:
-        G.nodes[nm(x)]['label'] = str(x.shape)+str_dtype(ret.dtype)
-    if nm(ret) not in G.nodes: G.add_node(nm(ret))
 
-    G.nodes[nm(ret)]['label'] = (str(set(x.shape for x in inp))+"\n"+str(ret.shape) if optype == ReduceOps else str(ret.shape))+str_dtype(ret.dtype)+(f"\n{iop.op}" if iop.op in LoadOps else "")
-    G.nodes[nm(ret)]['fillcolor'] = top_colors[optype]
-    G.nodes[nm(ret)]['color'] = 'black'
-    G.nodes[nm(ret)]['style'] = 'filled'
+    # get inputs for shapetrackers
+    input_to_st = defaultdict(list)
+    for lo in si.ast.get_lazyops():
+      if lo.op != BufferOps.MEM: continue
+      input_to_st[si.inputs[lo.arg.idx-1]].append(lo.arg.st)
+
+    # add them to the graph, potentially with a movement op seperating them
+    for x in input_to_st:
+      for st in dedup(input_to_st[x]):
+        if st.contiguous:
+          G.add_edge(nm(x), nm(si.out), label=get_sop(op), color='#00000060')
+        else:
+          inter_node = node_count
+          node_count += 1
+          G.add_node(inter_node, style='filled', fillcolor="#80ff8080", color="black", label=f"{st.shape}\n{st.real_strides()}" + (f"\n{st.real_offset()}" if st.real_offset() != 0 else ""))
+          G.add_edge(nm(x), inter_node, color='#00000060')
+          G.add_edge(inter_node, nm(si.out), label=get_sop(op), color='#00000060')
+      if 'label' not in G.nodes[nm(x)]:
+        G.nodes[nm(x)]['label'] = str(x.shape)+str_dtype(si.out.dtype)
+
+    if nm(si.out) not in G.nodes: G.add_node(nm(si.out))
+
+    G.nodes[nm(si.out)]['label'] = (str(set(x.shape for x in si.inputs))+"\n"+str(si.out.shape) if optype == ReduceOps else str(si.out.shape))+str_dtype(si.out.dtype)+(f"\n{si.ast.op}" if si.ast.op in LoadOps else "")
+    G.nodes[nm(si.out)]['fillcolor'] = top_colors[optype]
+    G.nodes[nm(si.out)]['color'] = 'black'
+    G.nodes[nm(si.out)]['style'] = 'filled'
+
+def _tree(lazydata, prefix=""):
+  if type(lazydata).__name__ == "LazyBuffer": return [f"━━ realized {lazydata.dtype.name} {lazydata.shape}"] if (lazydata.realized) else _tree(lazydata.op, "LB ")
+  if len(lazydata.src) == 0: return [f"━━ {prefix}{lazydata.op.name} {lazydata.arg if lazydata.arg else ''}"]
+  lines = [f"━┳ {prefix}{lazydata.op.name} {lazydata.arg if lazydata.arg else ''}"]
+  childs = [_tree(c) for c in lazydata.src[:]]
+  for c in childs[:-1]: lines += [f" ┣{c[0]}"] + [f" ┃{l}" for l in c[1:]]
+  return lines + [" ┗"+childs[-1][0]] + ["  "+l for l in childs[-1][1:]]
+
+def print_tree(lazydata:LazyOp): print("\n".join([f"{str(i).rjust(3)} {s}" for i,s in enumerate(_tree(lazydata))]))
+
+def graph_uops(uops):
+  colors = {UOps.ALU: "#ffffc0", UOps.LOAD: "#ffc0c0", UOps.STORE: "#c0ffc0", UOps.SPECIAL: "#c0c0ff", UOps.CONST: "#e0e0e0",
+            UOps.DEFINE_GLOBAL: "#ffe0b0", UOps.DEFINE_LOCAL: "#ffe0d0", UOps.DEFINE_ACC: "#f0ffe0",
+            UOps.LOOP: "#c8a0e0", UOps.PHI: "#e0ffc0"}
+  G = nx.DiGraph()
+  for u in uops:
+    G.add_node(u.num, label=f"{str(u.uop)[5:]}{(' '+str(u.arg)) if u.arg is not None else ''}\n{str(u.dtype)}", style="filled", fillcolor=colors.get(u.uop, "#ffffff"))
+    for v in u.vin: G.add_edge(v.num, u.num)
+  GRAPHPATH = "/tmp/uops"
+  nx.drawing.nx_pydot.write_dot(G, f'{GRAPHPATH}.dot')
+  os.system(f'dot -Grankdir=LR -Tsvg {GRAPHPATH}.dot -o {GRAPHPATH}.svg')
