@@ -16,6 +16,7 @@ def eval_resnet():
   input_mean = Tensor([0.485, 0.456, 0.406]).reshape(1, -1, 1, 1)
   input_std = Tensor([0.229, 0.224, 0.225]).reshape(1, -1, 1, 1)
   def input_fixup(x):
+    return x
     x = x.permute([0,3,1,2]).cast(dtypes.float32) / 255.0
     x -= input_mean
     x /= input_std
@@ -31,19 +32,12 @@ def eval_resnet():
   BS = 64
   n,d = 0,0
   st = time.perf_counter()
-  iterator = cross_process(lambda: iterate(BS))
-  x,ny = next(iterator)
-  dat = Tensor(x)
-  while dat is not None:
-    y = ny
+  for x, y, tm in cross_process(lambda: iterate(bs=BS, val=True, num_workers=16)):
+    dat = Tensor(x)
     GlobalCounters.reset()
     mt = time.perf_counter()
+
     outs = mdlrun(dat) if dat.shape[0] != BS else mdljit(dat)
-    try:
-      x,ny = next(iterator)
-      dat = Tensor(x)
-    except StopIteration:
-      dat = None
     t = outs.argmax(axis=1).numpy()
     et = time.perf_counter()
     n += (t==y).sum()
