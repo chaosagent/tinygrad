@@ -208,7 +208,7 @@ def apply_wino_upcast(self):
 
 def beam_pass(pool, beam_time, best_lin, rawbufs, var_vals, greedy_i, beam_width):
   best_lin, best_time = best_lin
-  acted_lins = itertools.chain((get_linearizer_actions(lin).items() for lin, _ in beam_time))
+  acted_lins = itertools.chain(*(list(get_linearizer_actions(lin, include_0=False).items()) for lin, _ in beam_time))
   compiling = [(lin, start_compile(pool, lin)) for i, lin in acted_lins if i != 0]
   timed_lins = [(lin, catch_exception(lambda: run_and_time(prg.get(timeout=5)[1], rawbufs, var_vals, baseline=best_time), on_fail=float('inf'))()) for lin, prg in tqdm(compiling, desc=f'greedy layer {greedy_i}', disable=DEBUG != 1)]
   opts = sorted(timed_lins, key=lambda x: x[1])
