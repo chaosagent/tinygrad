@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, functools, platform, time, re, contextlib, operator, pathlib, hashlib, tempfile, pickle, sqlite3
+import os, functools, platform, time, re, contextlib, operator, hashlib, pickle, sqlite3
 import numpy as np
 from typing import Dict, Tuple, Union, List, NamedTuple, Final, Iterator, ClassVar, Optional, Iterable, Any, TypeVar, TYPE_CHECKING
 if TYPE_CHECKING:  # TODO: remove this and import TypeGuard from typing once minimum python supported version is 3.10
@@ -19,7 +19,8 @@ def argsort(x): return type(x)(sorted(range(len(x)), key=x.__getitem__)) # https
 def all_same(items): return all(x == items[0] for x in items)
 def all_int(t: Tuple[Any, ...]) -> TypeGuard[Tuple[int, ...]]: return all(isinstance(s, int) for s in t)
 def colored(st, color, background=False): return f"\u001b[{10*background+60*(color.upper() == color)+30+['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'].index(color.lower())}m{st}\u001b[0m" if color is not None else st  # replace the termcolor library with one line
-def ansilen(s): return len(re.sub('\x1b\\[(K|.*?m)', '', s))
+def ansistrip(s): return re.sub('\x1b\\[(K|.*?m)', '', s)
+def ansilen(s): return len(ansistrip(s))
 def make_pair(x:Union[int, Tuple[int, ...]], cnt=2) -> Tuple[int, ...]: return (x,)*cnt if isinstance(x, int) else x
 def flatten(l:Union[List, Iterator]): return [item for sublist in l for item in sublist]
 def fromimport(mod, frm): return getattr(__import__(mod, fromlist=[frm]), frm)
@@ -59,7 +60,7 @@ class ContextVar:
   def __gt__(self, x): return self.value > x
   def __lt__(self, x): return self.value < x
 
-DEBUG, IMAGE, BEAM = ContextVar("DEBUG", 0), ContextVar("IMAGE", 0), ContextVar("BEAM", 0)
+DEBUG, IMAGE, BEAM, NOOPT = ContextVar("DEBUG", 0), ContextVar("IMAGE", 0), ContextVar("BEAM", 0), ContextVar("NOOPT", 0)
 GRAPH, GRAPHPATH = getenv("GRAPH", 0), getenv("GRAPHPATH", "/tmp/net")
 
 class Timing(contextlib.ContextDecorator):
@@ -129,8 +130,10 @@ class dtypes:
   # NOTE: these are internal dtypes, should probably check for that
   _int2: Final[DType] = DType(2, 4*2, "int2", None, 2)
   _half4: Final[DType] = DType(0, 2*4, "half4", None, 4)
+  _half16: Final[DType] = DType(0, 2*16, "half16", None, 16)
   _float2: Final[DType] = DType(4, 4*2, "float2", None, 2)
   _float4: Final[DType] = DType(4, 4*4, "float4", None, 4)
+  _float8: Final[DType] = DType(4, 4*8, "float8", None, 8)
   _arg_int32: Final[DType] = DType(2, 4, "_arg_int32", None)
 
   # NOTE: these are image dtypes
@@ -153,39 +156,37 @@ class GlobalCounters:
   @staticmethod
   def reset(): GlobalCounters.global_ops, GlobalCounters.global_mem, GlobalCounters.time_sum_s, GlobalCounters.kernel_count = 0,0,0.0,0
 
-# *** compiled cache decorator ***
-
-def cache_compiled(func):
-  def wrapper(self, prg:str, *args, **kwargs) -> bytes:
-    cache_path, output_file = pathlib.Path(f"{tempfile.gettempdir()}/tinygrad_cc_{hashlib.sha256(prg.encode()).hexdigest()}"), pathlib.Path(tempfile.mktemp())
-    if not cache_path.exists():
-      output_file.write_bytes(func(self, prg, *args, **kwargs))
-      output_file.rename(cache_path)
-    return cache_path.read_bytes()
-  return wrapper
-
 # *** universal database cache ***
 
-CACHEDB = getenv("CACHEDB", "/tmp/tinygrad_cache")
-VERSION = 2
+_cache_dir: str = getenv("XDG_CACHE_HOME", os.path.expanduser("~/Library/Caches" if OSX else "~/.cache"))
+CACHEDB: str = getenv("CACHEDB", os.path.abspath(os.path.join(_cache_dir, "tinygrad", "cache.db")))
+CACHELEVEL = getenv("CACHELEVEL", 2)
+
+VERSION = 6
 _db_connection = None
 def db_connection():
   global _db_connection
   if _db_connection is None:
+    os.makedirs(CACHEDB.rsplit(os.sep, 1)[0], exist_ok=True)
     _db_connection = sqlite3.connect(CACHEDB)
-    if DEBUG >= 3: _db_connection.set_trace_callback(print)
+    if DEBUG >= 7: _db_connection.set_trace_callback(print)
     if diskcache_get("meta", "version") != VERSION:
       print("cache is out of date, clearing it")
+      _db_connection.close()
+      del _db_connection
       os.unlink(CACHEDB)
       _db_connection = sqlite3.connect(CACHEDB)
-      if DEBUG >= 3: _db_connection.set_trace_callback(print)
+      if DEBUG >= 7: _db_connection.set_trace_callback(print)
       diskcache_put("meta", "version", VERSION)
   return _db_connection
 
 def diskcache_get(table:str, key:Union[Dict, str, int]) -> Any:
+  if CACHELEVEL == 0: return None
   if isinstance(key, (str,int)): key = {"key": key}
+  conn = db_connection()
+  cur = conn.cursor()
   try:
-    res = db_connection().cursor().execute(f"SELECT val FROM {table} WHERE {' AND '.join([f'{x}=?' for x in key.keys()])}", tuple(key.values()))
+    res = cur.execute(f"SELECT val FROM {table} WHERE {' AND '.join([f'{x}=?' for x in key.keys()])}", tuple(key.values()))
   except sqlite3.OperationalError:
     return None  # table doesn't exist
   if (val:=res.fetchone()) is not None:
@@ -194,6 +195,7 @@ def diskcache_get(table:str, key:Union[Dict, str, int]) -> Any:
 
 _db_tables = set()
 def diskcache_put(table:str, key:Union[Dict, str, int], val:Any):
+  if CACHELEVEL == 0: return val
   if isinstance(key, (str,int)): key = {"key": key}
   conn = db_connection()
   cur = conn.cursor()
@@ -206,3 +208,11 @@ def diskcache_put(table:str, key:Union[Dict, str, int], val:Any):
   conn.commit()
   cur.close()
   return val
+
+def diskcache(func):
+  def wrapper(*args, **kwargs) -> bytes:
+    table, key = f"cache_{func.__name__}", hashlib.sha256(pickle.dumps((args, kwargs))).hexdigest()
+    if (ret:=diskcache_get(table, key)): return ret
+    return diskcache_put(table, key, func(*args, **kwargs))
+  setattr(wrapper, "__wrapped__", func)
+  return wrapper

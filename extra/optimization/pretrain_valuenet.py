@@ -14,7 +14,7 @@ from tinygrad.shape.shapetracker import ShapeTracker
 from tinygrad.shape.view import View
 from tinygrad.shape.symbolic import Variable
 inf, nan = float('inf'), float('nan')
-from tinygrad.codegen.optimizer import Opt, OptOps
+from tinygrad.codegen.kernel import Opt, OptOps
 
 from extra.optimization.helpers import lin_to_feats, MAX_DIMS
 
@@ -29,7 +29,7 @@ class ValueNet:
   def __call__(self, x):
     x = self.l1(x).relu()
     x = self.l2(x).relu()
-    x = self.l3(x).relu()
+    x = self.l3(x).relu().dropout(0.8)
     return self.l4(x)
 
 if __name__ == "__main__":
