@@ -33,14 +33,19 @@ class TensorCore:
   arch: Optional[str] = None
   def __str__(self): return f"tensor_core<{self.device}, {self.dims}, {self.dtype_in}, {self.dtype_out}>"
 
+
 tensor_cores: Dict[str, List[TensorCore]] = {
   "METAL": [
-    TensorCore(device="METAL", dims=[8,8,8], dtype_in=dtypes.float, dtype_out=dtypes.float, upcast_dim=0, threads=[(0,2),(1,4),(0,2),(1,2)], thread_local_sizes=[2,2,2], thread_local_aliases= [ [[4],[0],[2],[0],[-1, 1, 3],[0]], [[0],[3],[0],[1],[2, 4],[-1]], [[4],[3],[2],[1],[0],[-1]] ], arch="arm64"),
-    TensorCore(device="METAL", dims=[8,8,8], dtype_in=dtypes.half,  dtype_out=dtypes.half,  upcast_dim=0, threads=[(0,2),(1,4),(0,2),(1,2)], thread_local_sizes=[2,2,2], thread_local_aliases= [ [[4],[0],[2],[0],[-1, 1, 3],[0]], [[0],[3],[0],[1],[2, 4],[-1]], [[4],[3],[2],[1],[0],[-1]] ], arch="arm64"),
+    TensorCore(device="METAL", dims=[8, 8, 8], dtype_in=dtypes.float, dtype_out=dtypes.float, upcast_dim=0, threads=[(0, 2), (1, 4), (0, 2), (1, 2)], thread_local_sizes=[2, 2, 2],
+               thread_local_aliases=[[[4], [0], [2], [0], [-1, 1, 3], [0]], [[0], [3], [0], [1], [2, 4], [-1]], [[4], [3], [2], [1], [0], [-1]]], arch="arm64"),
+    TensorCore(device="METAL", dims=[8, 8, 8], dtype_in=dtypes.half, dtype_out=dtypes.half, upcast_dim=0, threads=[(0, 2), (1, 4), (0, 2), (1, 2)], thread_local_sizes=[2, 2, 2],
+               thread_local_aliases=[[[4], [0], [2], [0], [-1, 1, 3], [0]], [[0], [3], [0], [1], [2, 4], [-1]], [[4], [3], [2], [1], [0], [-1]]], arch="arm64"),
   ],
   "HIP": [
-    TensorCore(device="HIP", dims=[16,16,16], dtype_in=dtypes.half, dtype_out=dtypes.float, upcast_dim=1, threads=[(0,16),(1,2)], thread_local_sizes=[16,16,8], thread_local_aliases=[ [[0],[0],[-1],[1]], [[0],[1],[-1],[0]], [[0],[1],[0],[2,-1]] ]),
-    TensorCore(device="HIP", dims=[16,16,16], dtype_in=dtypes.half, dtype_out=dtypes.half,  upcast_dim=1, threads=[(0,16),(1,2)], thread_local_sizes=[16,16,8], thread_local_aliases=[ [[0],[0],[-1],[1]], [[0],[1],[-1],[0]], [[0],[1],[0],[2,-1]] ]),
+    TensorCore(device="HIP", dims=[16, 16, 16], dtype_in=dtypes.half, dtype_out=dtypes.float, upcast_dim=1, threads=[(0, 16), (1, 2)], thread_local_sizes=[16, 16, 8],
+               thread_local_aliases=[[[0], [0], [-1], [1]], [[0], [1], [-1], [0]], [[0], [1], [0], [2, -1]]]),
+    TensorCore(device="HIP", dims=[16, 16, 16], dtype_in=dtypes.half, dtype_out=dtypes.half, upcast_dim=1, threads=[(0, 16), (1, 2)], thread_local_sizes=[16, 16, 8],
+               thread_local_aliases=[[[0], [0], [-1], [1]], [[0], [1], [-1], [0]], [[0], [1], [0], [2, -1]]]),
   ]
 }
 

@@ -108,7 +108,7 @@ def train_cifar():
         'pad_amount': 2
     },
     'ema': {
-        'steps': 399,
+        'steps': 39900000,
         'decay_base': .95,
         'decay_pow': 1.6,
         'every_n_steps': 5,

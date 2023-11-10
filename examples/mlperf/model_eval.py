@@ -25,7 +25,7 @@ def eval_resnet():
   mdljit = TinyJit(mdlrun)
 
   # evaluation on the mlperf classes of the validation set from imagenet
-  from extra.datasets.imagenet import iterate
+  from extra.datasets.imagenet import iterate, get_val_files
   from extra.helpers import cross_process
 
   BS = 64
@@ -34,7 +34,8 @@ def eval_resnet():
   iterator = cross_process(lambda: iterate(BS))
   x,ny = next(iterator)
   dat = Tensor(x)
-  while dat is not None:
+  for _ in range(getenv("STEPS", len(get_val_files()))):
+    if dat is None: break
     y = ny
     GlobalCounters.reset()
     mt = time.perf_counter()
