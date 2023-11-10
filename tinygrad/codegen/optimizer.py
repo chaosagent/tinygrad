@@ -178,7 +178,7 @@ class OptimizedKernel(Kernel):
 
         if not(axis_buf0 and axis_buf1 and self.full_shape[self.first_reduce]%tc.dims[2] == 0 and self.full_shape[self.first_reduce] >= tc.dims[2] and (self.shape_len-self.first_reduce) == 1): continue
 
-        if DEBUG >= 3: print("TENSOR CORES", axis_buf0, axis_buf1, tc)
+        if DEBUG >= 0: print("TENSOR CORES", axis_buf0, axis_buf1, tc)
 
         s0, s1 = axis_buf0[-1][0], axis_buf1[-1][0] # TODO: select axis in smart way
         s0_exists, s1_exists = True, True
@@ -225,6 +225,24 @@ class OptimizedKernel(Kernel):
         self.alias_buffer(buf1, alias_pattern)
         return True
     return False
+
+  def apply_winograd(self):
+    # TODO: doing extra upcasts with images doesn't work for some reason (maybe has to do with to_image_idx)
+    # to trigger the above bug, remove prod(self.full_shape[self.shape_len - self.upcasted:]) from the below
+    # expression and run test/test_ops.py with IMAGE=2
+    # if there are small dims with lots of valid masks, upcast them (they might be from Tensor.stack)
+    # this can be made much smarter
+    to_upcast: List[int] = []
+    # upcast leading axes first (hack-ish for winograd; we actually want to upcast masked axes with low stride first)
+    for axis in range(self.first_reduce):
+      # we might want to be able to split axes that are masked, or refuse to merge them in simplify_merge_adjacent
+      # for now skip upcasting here if there is a symbolic axis
+      if isinstance(self.full_shape[axis], int) and self.full_shape[axis] <= 7 and any(st.axis_is_masked(axis) for st in self.sts) and \
+        prod(self.full_shape[self.shape_len - self.upcasted:]) * prod(self.full_shape[j] for j in to_upcast) * self.full_shape[axis] <= 7 * 7:
+        if DEBUG >= 4: print(f"upcasting masked axis : {axis}")
+        to_upcast.append(axis)
+    for axis in to_upcast[::-1]:
+      self.apply_opt(Opt(OptOps.UPCAST, axis, 0))
 
   def apply_opt(self, opt:Opt):
     self.applied_opts.append(opt)

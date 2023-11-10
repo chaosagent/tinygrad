@@ -289,6 +289,7 @@ class Compiled:
         if BEAM and not vars_from_ast(ast):
           kb = Linearizer(ast, self.linearizer_opts)
           kb.required_optimizations()
+          kb.apply_winograd()
           kb.dont_use_locals = bool(getenv("NOLOCALS"))
           from tinygrad.features.search import beam_search, time_linearizer
           lins = [(f"beam{BEAM.value}", beam_search(kb, rawbuffers, BEAM.value)), (("tc" if used_tensor_cores else "hc"), k)]

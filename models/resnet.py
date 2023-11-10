@@ -1,6 +1,7 @@
 import tinygrad.nn as nn
 from tinygrad.tensor import Tensor
 from extra.utils import get_child
+from tinygrad.helpers import dtypes
 
 class BasicBlock:
   expansion = 1
@@ -97,6 +98,7 @@ class ResNet:
     return layers
 
   def forward(self, x):
+    half = x.dtype == dtypes.half
     is_feature_only = self.fc is None
     if is_feature_only: features = []
     out = self.bn1(self.conv1(x)).relu()
@@ -111,7 +113,10 @@ class ResNet:
     if is_feature_only: features.append(out)
     if not is_feature_only:
       out = out.mean([2,3])
-      out = self.fc(out).log_softmax()
+      if half:
+        out = self.fc(out).float().log_softmax()
+      else:
+        out = self.fc(out).log_softmax()
       return out
     return features
 
