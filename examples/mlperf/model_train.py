@@ -78,14 +78,16 @@ def train_resnet():
     # train loop
     Tensor.training = True
     dt = time.perf_counter()
-    for i, (X, Y, data_time) in enumerate(tqdm(t := cross_process(lambda: iterate(bs=BS, val=False, num_workers=16)), total=steps_in_train_epoch)):
+    for i, (X, Y, data_time) in enumerate(tqdm(t := cross_process(lambda: iterate(bs=BS, val=False, num_workers=48)), total=steps_in_train_epoch)):
+      if i == 0: Xt, Yt = Tensor(X, requires_grad=False).realize(), Tensor(Y, requires_grad=False).realize()
+      next_Xt, next_Yt = Tensor(X, requires_grad=False).realize(), Tensor(Y, requires_grad=False).realize()
+      next_X , next_Y = X, Y
       dte = time.perf_counter()
       GlobalCounters.reset()
       st = time.perf_counter()
-      if i == 0: Xt, Yt = Tensor(X, requires_grad=False), Tensor(Y, requires_grad=False)
       loss, out = train_step(Xt, Yt)
+      Xt, Yt = next_Xt, next_Yt
       et = time.perf_counter()
-      Xt, Yt = Tensor(X, requires_grad=False), Tensor(Y, requires_grad=False)
       loss_cpu = loss.numpy()
       cl = time.perf_counter()
 
