@@ -349,9 +349,9 @@ class Kernel:
         axis_buf0 = [(i,self.full_shape[i],buf1_strides[i]) for i,s in enumerate(buf0_strides[:self.first_reduce]) if s == 0 and self.full_shape[i]%tc.dims[0] == 0]
         axis_buf1 = [(i,self.full_shape[i],buf0_strides[i]) for i,s in enumerate(buf1_strides[:self.first_reduce]) if s == 0 and self.full_shape[i]%tc.dims[1] == 0]
 
-        if not(axis_buf0 and axis_buf1 and self.full_shape[self.first_reduce]%tc.dims[2] == 0 and self.full_shape[self.first_reduce] >= tc.dims[2] and (self.shape_len-self.first_reduce) == 1): continue
+        if not(axis_buf0 and axis_buf1 and self.full_shape[self.first_reduce]%tc.dims[2] == 0 and self.full_shape[self.first_reduce] >= tc.dims[2]): continue
 
-        if DEBUG >= 3: print("TENSOR CORES", axis_buf0, axis_buf1, tc)
+        if DEBUG >= 0: print("TENSOR CORES", axis_buf0, axis_buf1, tc)
 
         s0, s1 = axis_buf0[-1][0], axis_buf1[-1][0] # TODO: select axis in smart way
         s0_exists, s1_exists = True, True
@@ -372,10 +372,60 @@ class Kernel:
         for (tc_dim, tc_amt) in tc.threads:
           fix(self.apply_opt(Opt(OptOps.LASTLOCAL, s0 if tc_dim == 0 else s1, tc_amt)), s0 if tc_dim == 0 else s1)
 
+        # imaginary example:
+        # axes: t0, t1
+        # b1 shape: (m, n)
+        # b1 stride: (m, 0)
+        # b2 shape: (m, n)
+        # b2 stride: (0, n)
+        # tiling: (local, upcast)
+        # so we want to permute b2 (0, n) to (n, 0)
+        #   and reshape both to (m=n, 0)
+        """
+        permute_axes = range(len(self.full_shape))
+        permute_axes[t0], permute_axes[t1] = permute_axes[t1], permute_axes[t0]
+        mul_op.src[1].permute(tuple(permute_axes))
+        shrink_axes = list(self.full_shape)
+        shrink_axes[t1] = 1
+        mul_op.shrink(tuple((0, s-1) for s in shrink_axes))
+        """
+
+        # rdna3 wmma
+        # output: (32, 8)
+        # target: (2, 16, 16, 1) (local, local, reduce, upcast) stride (0, 16, 1, 0)
+        # input: (16, 2, 16, 1) (16, 2, 16, 8) (local, local, reduce, upcast) (tl1, tl2, tr, tu)
+        # stride: (16, 0, 1, 0) (0, 16*8, 1, 16)
+        # for first:
+        # split: (16, 2, 16, 1)
+        # permute: (2, 16, 16, 1)
+        # for second:
+        # shrink: (2, 2, 16, 8)
+        # permute: (2, 2, 8, 16)
+        # merge: (2, 16, 16, 1)
+        input1, input2 = mul_ops.src[0], mul_ops.src[1]
+        input1.reshape(input1.shape[:tl] + (16, 2) + input1.shape[tl+1:])
+        input1_permute = list(range(len(input1.shape)))
+        input1_permute[tl], input1_permute[tl+1] = input1_permute[tl+1], input1_permute[tl]
+        input1.permute(input1_permute)
+        input2_shrink = list(input2.shape)
+        input2_shrink[tl] = 2
+        input2.shrink(tuple((0, s-1) for s in input2_shrink))
+        input2_reshape = list(input2.shape)
+        input2_permute = list(range(len(input2.shape)))
+        input2_permute.insert(tl2 + 1, input2.pop(tu))  #assume tu > tl2
+        input2.permute(tuple(input2_permute))
+        input2_reshape[tl2] = 16
+        input2_reshape[tu] = 1
+        input2.reshape(input2_reshape)
+
+        self.ast = LazyOp(ReduceOps.WMMA, (input1, input2), (self.reduceop.arg, tc))
+
         # assert tensor core and prevent extra_opts from altering the key shape structure
         if use_tensor_cores == 1: self.tensor_core = tc # TC=2 will do the shape ops without the WMMA
 
-        if extra_opts is not None:
+        if False:
+          pass
+        elif extra_opts is not None:
           for opt in extra_opts:
             self.apply_opt(opt)
         else:
