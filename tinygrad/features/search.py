@@ -66,6 +66,7 @@ def time_linearizer(lin:Linearizer, rawbufs:List[RawBuffer], allow_test_size=Tru
       print(lin.applied_opts)
     tms = [float('inf')]
   if CACHELEVEL >= 2: diskcache_put("time_linearizer", key, tms)
+  if DEBUG >= 2: print(lin.display_name, f"{min(tms) * 10**6:6.2f}")
   return min(tms)
 
 # get (scrap) buffers for timing the linearizer
@@ -91,13 +92,26 @@ def get_linearizer_actions(lin:Linearizer, include_0=True) -> Dict[int, Lineariz
       for s,c in zip(lin2.full_shape, lin2.colors()):
         if c in {"magenta", "yellow"}: up *= s
         if c in {"cyan", "green", "white"}: lcl *= s
-      if up > 256 or lcl > 256: continue
+      if (not lin2.tensor_core and up > 256 or up > 2 ** 12) or lcl > 256 or ("green" in lin2.colors() and up * lcl >= 2 ** 12): continue
       acted_lins[i+1] = lin2
     except Exception:
       pass
   return acted_lins
 
 def tuplize_uops(uops:List[UOp]) -> Tuple: return tuple([(x.uop, x.dtype, tuple(uops.index(x) for x in x.vin), x.arg) for x in uops])
+
+def pick_beam(opts, amt):
+  counts = {}
+  beam = []
+  for lin, tm in opts:
+    if len(beam) >= amt: break
+    locals = tuple(lin.full_shape[lin.first_reduce - lin.local_dims:lin.first_reduce])
+    count = counts.get(locals, 0)
+    if count >= getenv("BEAMDIV", 4): continue
+    counts[locals] = count + 1
+    beam.append((lin, tm))
+  return beam
+
 
 def beam_search(lin:Linearizer, rawbufs, amt:int, allow_test_size=True) -> Linearizer:
   key = {"ast": str(lin.ast), "amt": amt, "allow_test_size": allow_test_size}
@@ -132,7 +146,7 @@ def beam_search(lin:Linearizer, rawbufs, amt:int, allow_test_size=True) -> Linea
     if len(opts) == 0 or beam[0][1] <= opts[0][1]: break  # we didn't get faster
 
     # keep the BEAM best
-    beam = opts[:amt]
+    beam = pick_beam(opts, amt)
     if DEBUG >= 2: print(f"{opts[0][1]*1e6:12.2f} us from {len(lins):3d} -> {len(opts):3d} actions", beam[0][0].colored_shape())
 
   if CACHELEVEL >= 1: diskcache_put("beam_search", key, beam[0][0].applied_opts)

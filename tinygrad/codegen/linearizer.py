@@ -151,6 +151,13 @@ class Linearizer(Kernel):
     # no new opts and we already ran? skip relinearizing
     if self.applied_opts == self.applied_opts_cache: return self
 
+    if self.tensor_core is not None:
+      # alias buffer
+      buf0, buf1 = self.tensor_core_buffers
+      alias_pattern = [0] * (self.global_dims + (self.local_dims - len(self.tensor_core.threads))) + [2] * (len(self.tensor_core.threads)) + [0] * (self.shape_len - self.upcasted - self.first_reduce) + [1, 1] + [3] * (self.upcasted - 2)
+      self.alias_buffer(buf0, alias_pattern)
+      self.alias_buffer(buf1, alias_pattern)
+
     # save backups
     sts_backup, gfr_backup, upc_backup = self.sts[:], self.group_for_reduce[:], self.upcasted
 

@@ -276,6 +276,7 @@ class Compiled:
           test_rawbuffers = [type(rawbuffers[0])(rawbuffers[0].size, rawbuffers[0].dtype), *rawbuffers[1:]] if rawbuffers[0] in rawbuffers[1:] else rawbuffers
           kb = Linearizer(ast, self.linearizer_opts)
           kb.required_optimizations()
+          kb.apply_tensor_cores(getenv("TC", 1), hand_coded=False)
           from tinygrad.features.search import beam_search, time_linearizer
           lins.append((f"beam{BEAM.value}", beam_search(kb, test_rawbuffers, BEAM.value, bool(getenv("BEAM_ESTIMATE", 1)))))
           if used_tensor_cores:
