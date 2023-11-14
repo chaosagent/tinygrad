@@ -290,8 +290,8 @@ class Linearizer(Kernel):
         nx, ny, nacc = (len(locals_to_store[0][2])//wmma_sz[0]), (len(locals_to_store[1][2])//wmma_sz[1]), (len(acc)//wmma_sz[2])
         acc_reds = math.isqrt((nx*ny)//nacc)
         i, bx, by = 0, nx//acc_reds, ny//acc_reds
-        for y in range(by):
-          for x in range(bx):
+        for x in range(bx):
+          for y in range(by):
             for j in range(acc_reds):
               op1, op2, op3 = locals_to_store[0][2][(x+(j*bx))*wmma_sz[0]:(x+(j*bx)+1)*wmma_sz[0]], locals_to_store[1][2][(y+(j*by))*wmma_sz[1]:(y+(j*by)+1)*wmma_sz[1]], acc[i:i+wmma_sz[2]]
               if self.opts.device != "HIP":

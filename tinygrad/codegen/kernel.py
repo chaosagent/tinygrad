@@ -439,6 +439,7 @@ class Kernel:
     elif opt.op == OptOps.UNROLL:     # purple
       assert axis < self.shape_len-self.upcasted, "can't upcasted already upcasted"
       assert amt <= 32, "don't unroll more than 32"
+      if self.full_shape[axis] == amt: self.local_dims += 1  # a fully unrolled reduce dim looks like a local dim :(
       self.shift_to(axis, amt, insert_before=self.shape_len if not simd else self.shape_len - self.upcasted + self.simd_upcasted)
       self.upcast()
       if simd: self.simd_upcasted += 1
