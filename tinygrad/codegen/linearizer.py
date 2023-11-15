@@ -160,6 +160,14 @@ class Linearizer(Kernel):
     # limit dims if we need to
     if self.opts.global_max and self.opts.local_max: self.limit_dims_to_max(self.opts.global_max, self.opts.local_max)
 
+    # apply TC simd local buffer transform
+    if self.tensor_core_buffers is not None:
+      # alias buffer
+      buf0, buf1 = self.tensor_core_buffers
+      alias_pattern = [0] * (self.global_dims + (self.local_dims - len(self.tensor_core.threads))) + [2] * (len(self.tensor_core.threads)) + [0] * (self.shape_len - self.upcasted - self.first_reduce) + [1, 1] + [3] * (self.upcasted - 2)
+      self.alias_buffer(buf0, alias_pattern)
+      self.alias_buffer(buf1, alias_pattern)
+
     # uops
     self.uops: List[UOp] = []
     self.buf_uops: List[Optional[UOp]] = [None]*len(self.bufs)
