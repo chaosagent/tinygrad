@@ -66,7 +66,7 @@ def time_linearizer(lin:Linearizer, rawbufs:List[RawBuffer], allow_test_size=Tru
       print(lin.applied_opts)
     tms = [float('inf')]
   if CACHELEVEL >= 2: diskcache_put("time_linearizer", key, tms)
-  if DEBUG >= 2: print(lin.display_name, f"{min(tms) * 10**6:6.2f}")
+  if DEBUG >= 2: print(lin.display_name, f"{min(tms) * 10**6:6.2f} us, {lin.info.flops / min(tms) / 10 ** 12:3.3f} tflop/s")
   return min(tms)
 
 # get (scrap) buffers for timing the linearizer
@@ -113,8 +113,8 @@ def pick_beam(opts, amt):
   return beam
 
 
-def beam_search(lin:Linearizer, rawbufs, amt:int, allow_test_size=True) -> Linearizer:
-  key = {"ast": str(lin.ast), "amt": amt, "allow_test_size": allow_test_size}
+def beam_search(lin:Linearizer, rawbufs, amt:int, allow_test_size=True, variant="") -> Linearizer:
+  key = {"ast": str(lin.ast), "amt": amt, "allow_test_size": allow_test_size, "variant": variant}
   if (val:=diskcache_get("beam_search", key)) is not None and not getenv("IGNORE_BEAM_CACHE") and CACHELEVEL >= 1:
     ret = lin.copy()
     for o in val[len(lin.applied_opts):]: ret.apply_opt(o)
@@ -122,6 +122,7 @@ def beam_search(lin:Linearizer, rawbufs, amt:int, allow_test_size=True) -> Linea
 
   # init the BEAM with the base linearizer
   beam: List[Tuple[Linearizer, float]] = [(lin, time_linearizer(lin, rawbufs, allow_test_size=allow_test_size))]
+  flops = lin.info.flops
 
   # NOTE: real uops use a weird compare method that's only valid inside a linearizer
   seen_uops = {tuplize_uops(lin.linearize().uops): tuple(lin.applied_opts)}
@@ -147,7 +148,7 @@ def beam_search(lin:Linearizer, rawbufs, amt:int, allow_test_size=True) -> Linea
 
     # keep the BEAM best
     beam = pick_beam(opts, amt)
-    if DEBUG >= 2: print(f"{opts[0][1]*1e6:12.2f} us from {len(lins):3d} -> {len(opts):3d} actions", beam[0][0].colored_shape())
+    if DEBUG >= 2: print(f"{opts[0][1]*1e6:12.2f} us ({flops / opts[0][1] / 10**12:3.3} tflops) from {len(lins):3d} -> {len(opts):3d} actions", beam[0][0].colored_shape())
 
   if CACHELEVEL >= 1: diskcache_put("beam_search", key, beam[0][0].applied_opts)
   if DEBUG >= 3: print(beam[0][0].applied_opts)
