@@ -88,7 +88,7 @@ def get_linearizer_actions(lin:Linearizer, include_0=True) -> Dict[int, Lineariz
     lin2 = lin.copy()
     try:
       lin2.apply_opt(a)
-      up, lcl = 1, 1
+      up, lcl, lbuf = 1, 1, 1
       for s,c in zip(lin2.full_shape, lin2.colors()):
         if c in {"magenta", "yellow"}: up *= s
         if c in {"cyan", "green", "white"}: lcl *= s
