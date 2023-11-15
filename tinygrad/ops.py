@@ -261,6 +261,7 @@ class Compiled:
 
     # compilation time
     def get_program():
+      #if GlobalCounters.kernel_count == 22: BEAM.value = 2
       if DEBUG >= 3:
         from tinygrad.graph import print_tree
         print_tree(ast)
@@ -291,6 +292,7 @@ class Compiled:
       # extract real vars used in ast
       prg.vars = vars_from_ast(ast)
       assert all(v._val is None for v in prg.vars), f"ast contains bound Variable {prg.vars}"
+      #if GlobalCounters.kernel_count == 22: BEAM.value = 0
       return prg
 
     if getenv("ENABLE_METHOD_CACHE", 1):

@@ -398,6 +398,7 @@ class Linearizer(Kernel):
     val = self.ast_parse(self.ast, acc, None, loaded_buffers)
 
     # store
+    # why can do late ast with unrolled idxs??
     self.global_store(0, global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, val)
 
     # graph helper functions
