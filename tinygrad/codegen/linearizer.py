@@ -193,7 +193,7 @@ class Linearizer(Kernel):
     # kernel name (before late upcast)
     self.function_name = ("r_" if self.reduceop else "E_") + '_'.join([str(x) if isinstance(x, int) else sym_rename(x) for x in self.full_shape])
     self.display_name = ("r_" if self.reduceop else "E_") + colored('_', 'BLACK').join([colored(str(x), c) for x,c in zip(self.full_shape, self.colors())])
-    if DEBUG >= 2: print(self.display_name)
+    #print(self.display_name)
 
     # name the function something unique
     Linearizer.kernel_cnt[self.function_name] += 1
@@ -271,8 +271,9 @@ class Linearizer(Kernel):
       # compute local aliases
       locals_to_store = []
       tc_views = []
-      assert self.simd_upcasted == (len(self.tensor_core.thread_local_aliases[0]) - len(self.tensor_core.threads))
-      assert self.simd_local_dims == len(self.tensor_core.threads)
+      if self.tensor_core:
+        assert self.simd_upcasted == (len(self.tensor_core.thread_local_aliases[0]) - len(self.tensor_core.threads))
+        assert self.simd_local_dims == len(self.tensor_core.threads)
       for i in self.local_alias:
         localbuf_idx = self.bufs.index(self.local_alias[i])
         #print(self.sts[i].shape)

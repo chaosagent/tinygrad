@@ -241,6 +241,7 @@ class Kernel:
     # TODO: this should be factored in to multi shape stride
     if self.shape_len == 0: return False
     all_ones = [s==1 for s in self.full_shape]
+    # what about group for reduce?
     self.local_dims -= sum(all_ones[self.first_reduce-self.local_dims:self.first_reduce])
     self.upcasted -= sum(all_ones[self.shape_len-self.upcasted:])
     self.reshape_and_permute(lambda shape: [x for i,x in enumerate(shape) if not all_ones[i]], None)
@@ -347,7 +348,7 @@ class Kernel:
         axis_buf0 = [(i,self.full_shape[i],buf1_strides[i]) for i,s in enumerate(buf0_strides[:self.first_reduce]) if s == 0 and self.full_shape[i]%tc.dims[0] == 0]
         axis_buf1 = [(i,self.full_shape[i],buf0_strides[i]) for i,s in enumerate(buf1_strides[:self.first_reduce]) if s == 0 and self.full_shape[i]%tc.dims[1] == 0]
 
-        if not(axis_buf0 and axis_buf1 and self.full_shape[self.first_reduce]%tc.dims[2] == 0 and self.full_shape[self.first_reduce] >= tc.dims[2] and (self.shape_len-self.first_reduce) == 1): continue
+        if not(axis_buf0 and axis_buf1 and self.full_shape[self.first_reduce]%tc.dims[2] == 0 and self.full_shape[self.first_reduce] >= tc.dims[2] and ((self.shape_len-self.first_reduce) == 1 or True)): continue
 
         if DEBUG >= 3: print("TENSOR CORES", axis_buf0, axis_buf1, tc)
 
@@ -439,7 +440,7 @@ class Kernel:
     elif opt.op == OptOps.UNROLL:     # purple
       assert axis < self.shape_len-self.upcasted, "can't upcasted already upcasted"
       assert amt <= 32, "don't unroll more than 32"
-      if self.full_shape[axis] == amt: self.local_dims += 1  # a fully unrolled reduce dim looks like a local dim :(
+      if self.full_shape[axis] == amt and axis == self.first_reduce: self.local_dims += 1  # a fully unrolled leftmost reduce dim looks like a local dim :(
       self.shift_to(axis, amt, insert_before=self.shape_len if not simd else self.shape_len - self.upcasted + self.simd_upcasted)
       self.upcast()
       if simd: self.simd_upcasted += 1
