@@ -150,7 +150,6 @@ class Linearizer(Kernel):
   def linearize(self):
     # no new opts and we already ran? skip relinearizing
     if self.applied_opts == self.applied_opts_cache: return self
-    print(self.applied_opts)
 
     if self.tensor_core is not None:
       # alias buffer
@@ -194,7 +193,7 @@ class Linearizer(Kernel):
     # kernel name (before late upcast)
     self.function_name = ("r_" if self.reduceop else "E_") + '_'.join([str(x) if isinstance(x, int) else sym_rename(x) for x in self.full_shape])
     self.display_name = ("r_" if self.reduceop else "E_") + colored('_', 'BLACK').join([colored(str(x), c) for x,c in zip(self.full_shape, self.colors())])
-    print(self.display_name)
+    if DEBUG >= 2: print(self.display_name)
 
     # name the function something unique
     Linearizer.kernel_cnt[self.function_name] += 1
@@ -276,10 +275,10 @@ class Linearizer(Kernel):
       assert self.simd_local_dims == len(self.tensor_core.threads)
       for i in self.local_alias:
         localbuf_idx = self.bufs.index(self.local_alias[i])
-        print(self.sts[i].shape)
-        print(self.sts[i].real_strides())
-        print(self.local_alias[i])
-        print(self.sts[self.bufs.index(self.local_alias[i])])
+        #print(self.sts[i].shape)
+        #print(self.sts[i].real_strides())
+        #print(self.local_alias[i])
+        #print(self.sts[self.bufs.index(self.local_alias[i])])
         buf_idxs = [idx*0 if s == 0 else idx for idx,s in zip(global_idxs+local_idxs+reduce_idxs+full_upcast_idxs,self.sts[i].real_strides())]
         if self.tensor_core:
           rolling_stride = 1
@@ -294,7 +293,7 @@ class Linearizer(Kernel):
             tc_views.append(ShapeTracker((View.create(self.full_shape[self.shape_len - self.upcasted + self.simd_upcasted:], tuple(localbuf_strides)),)))
           else:
             tc_views.append(ShapeTracker((View.create((1,), (0,)),)))
-          print(tc_views[-1])
+          #print(tc_views[-1])
           min_alias_idx = min(self.local_alias.keys())
           replace_input_idxs = calc_tc_idxs(self.tensor_core.thread_local_sizes[i-min_alias_idx], self.tensor_core.thread_local_aliases[i-min_alias_idx])
           for n in range(len(self.tensor_core.threads)):
@@ -302,7 +301,7 @@ class Linearizer(Kernel):
           for n in range(len(replace_input_idxs)-len(self.tensor_core.threads)):
             buf_idxs[self.shape_len-self.upcasted+n] = replace_input_idxs[len(self.tensor_core.threads)+n] # replace upcasts
         if DEBUG >= 3: print(f"{localbuf_idx} alias {i}: idxs=", buf_idxs)
-        print(buf_idxs)
+        #print(buf_idxs)
         ll = self.global_load(i, buf_idxs)
         locals_to_store.append((localbuf_idx, buf_idxs, ll))
 
@@ -314,15 +313,15 @@ class Linearizer(Kernel):
         tc_upcast_idxs = tuple([rename_var(idx.expand_idx(), f"_uidx{j}") for j, idx in enumerate(tc_upcast_idxs)])
         wmma_sz = self.tensor_core.thread_local_sizes
         acc_offsets = self.acc_offsets(self.full_buf_index)
-        print(tc_views[0].expr_idxs(tc_upcast_idxs)[0])
-        print(tc_views[1].expr_idxs(tc_upcast_idxs)[0])
+        #print(tc_views[0].expr_idxs(tc_upcast_idxs)[0])
+        #print(tc_views[1].expr_idxs(tc_upcast_idxs)[0])
         x_idxs = tc_views[0].expr_idxs(tc_upcast_idxs)[0].expand(tc_upcast_idxs)
         y_idxs = tc_views[1].expr_idxs(tc_upcast_idxs)[0].expand(tc_upcast_idxs)
         tc_upcast_block_size = self.tensor_core.thread_local_sizes[2] * self.tensor_core.dims[2]  # outputs * reduce
-        print(len(locals_to_store[0][2]), len(locals_to_store[1][2]), len(acc))
+        #print(len(locals_to_store[0][2]), len(locals_to_store[1][2]), len(acc))
         for x_idx, y_idx, acc_i in zip(x_idxs, y_idxs, acc_offsets[::tc_upcast_block_size]):
           x, y = x_idx.unwrap(), y_idx.unwrap()
-          print(x, y, acc_i)
+          #print(x, y, acc_i)
           op1, op2, op3 = locals_to_store[0][2][x*wmma_sz[0]:(x+1)*wmma_sz[0]], locals_to_store[1][2][y*wmma_sz[1]:(y+1)*wmma_sz[1]], acc[acc_i:(acc_i+wmma_sz[2])]  # acc_i is multiplied by output upcast size by construction
           #op1, op2, op3 = locals_to_store[0][2][(x+(j*bx)+bs_i*bx*acc_reds)*wmma_sz[0]:(x+(j*bx+bs_i*bx*acc_reds)+1)*wmma_sz[0]], locals_to_store[1][2][(y+(j*by)+bs_i*by*acc_reds)*wmma_sz[1]:(y+(j*by)+bs_i*by*acc_reds+1)*wmma_sz[1]], acc[i:i+wmma_sz[2]]
           if self.opts.device != "HIP":
