@@ -102,6 +102,17 @@ def get_linearizer_actions(lin:Linearizer, include_0=True) -> Dict[int, Lineariz
 
 def tuplize_uops(uops:List[UOp]) -> Tuple: return tuple([(x.uop, x.dtype, tuple(uops.index(x) for x in x.vin), x.arg) for x in uops])
 
+def pick_beam(opts, amt):
+  counts = {}
+  beam = []
+  for lin, tm in opts:
+    if len(beam) >= amt: break
+    local_shape = tuple(lin.full_shape[lin.first_reduce - lin.local_dims:lin.first_reduce])
+    if (count := counts.get(local_shape, 0)) >= getenv("BEAMDIV", 4): continue
+    counts[local_shape] = count + 1
+    beam.append((lin, tm))
+  return beam
+
 def beam_search(lin:Linearizer, rawbufs, amt:int, allow_test_size=True) -> Linearizer:
   key = {"ast": str(lin.ast), "amt": amt, "allow_test_size": allow_test_size}
   if (val:=diskcache_get("beam_search", key)) is not None and not getenv("IGNORE_BEAM_CACHE") and CACHELEVEL >= 1:
@@ -135,7 +146,7 @@ def beam_search(lin:Linearizer, rawbufs, amt:int, allow_test_size=True) -> Linea
     if len(opts) == 0 or beam[0][1] <= opts[0][1]: break  # we didn't get faster
 
     # keep the BEAM best
-    beam = opts[:amt]
+    beam = pick_beam(opts, amt)
     if DEBUG >= 2: print(f"{opts[0][1]*1e6:12.2f} us from {len(lins):3d} -> {len(opts):3d} actions", beam[0][0].colored_shape())
 
   if CACHELEVEL >= 1: diskcache_put("beam_search", key, beam[0][0].applied_opts)
