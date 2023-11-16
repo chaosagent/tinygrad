@@ -5,7 +5,8 @@ from extra.optimization.helpers import load_worlds, ast_str_to_lin
 from tinygrad.codegen.linearizer import Linearizer
 from tinygrad.features.search import get_linearizer_actions, bufs_from_lin, tuplize_uops
 from tinygrad.graph import print_tree
-from tinygrad.helpers import getenv
+from tinygrad.helpers import ImageDType, prod, getenv, DEBUG
+from tinygrad.ops import Device, Compiled, Interpreted
 from tinygrad.ops import Device, Compiled, Interpreted, get_interpreted_fxn
 from tinygrad.lazy import vars_from_ast
 
@@ -39,28 +40,48 @@ def run_linearizer(lin: Linearizer, rawbufs=None, var_vals=None):
   return "PASS"
 
 
-def fuzz_linearizer(lin: Linearizer):
-  random.seed(42)
-  np.random.seed(42)
-  print_tree(lin.ast)
-  print(lin.colored_shape())
+def fuzz_linearizer(lin: Linearizer, seed=42):
+  og_lin = lin.copy()
+  base_opts = len(og_lin.applied_opts)
+  random.seed(seed)
+  np.random.seed(seed)
+  if DEBUG >= 1: print_tree(lin.ast)
+  if DEBUG >= 1: print(lin.colored_shape())
   rawbufs = bufs_from_lin(lin)
 
   seen_uops = {}
+  iters = 0
+  reroll_in_row = 0
   ground_truth = None
+  def reroll():
+    opts = random.choice(list(seen_uops.values()))
+    lin = og_lin.copy()
+    for opt in opts[base_opts:]: lin.apply_opt(opt)
+    return lin
   while 1:
-    if len(seen_uops) >= 20: break  # enough for this kernel
-    actions = get_linearizer_actions(lin, include_0=False)
-    if not actions: break
-    lin = random.choice(list(actions.values()))
-    if lin.applied_opts: print(f"applied action: {lin.applied_opts[-1]}")
+    if len(seen_uops) >= 200 or iters >= 400: break  # enough for this kernel
+    iters += 1
+    if ground_truth is not None:
+      actions = get_linearizer_actions(lin, include_0=False)
+      if not actions:
+        if reroll_in_row >= 5: break
+        reroll_in_row+=1
+        lin = reroll()
+        continue
+      lin = random.choice(list(actions.values()))
+      if lin.applied_opts and DEBUG >= 1: print(f"applied action: {lin.applied_opts[-1]}")
 
     # stop if kernel uops repeat
     tuops = tuplize_uops(lin.linearize().uops)
-    if tuops in seen_uops: break
+    if tuops in seen_uops:
+      if reroll_in_row >= 5: break
+      reroll_in_row += 1
+      lin = reroll()
+      continue
     seen_uops[tuops] = tuple(lin.applied_opts)
+    reroll_in_row = 0
 
-    print(lin.colored_shape())
+    if DEBUG >= 0: print(lin.colored_shape())
     # get a new output buffer
     rawbufs[0] = type(rawbufs[0])(rawbufs[0].size, rawbufs[0].dtype)
     var_vals = {v: random.randint(v.min, v.max) for v in vars_from_ast(lin.ast)}
@@ -91,11 +112,17 @@ if __name__ == "__main__":
   for i, ast in enumerate(ast_strs[:getenv("FUZZ_N", len(ast_strs))]):
     if "Variable" in ast and isinstance(device, Interpreted): continue  # no symbolic shape for Interpreted
     if "dtypes.image" in ast and Device.DEFAULT != "GPU": continue  # IMAGE is only for GPU
-    print(f"testing ast {i}")
     tested += 1
+    ast = ast.replace('dtypes.float', 'dtypes.half')
     lin = ast_str_to_lin(ast)
+    used_tc = lin.apply_tensor_cores(hand_coded=False)
+    print(f"testing ast {i}")
+    if not used_tc: continue
+    base_opts = len(lin.applied_opts)
+    seen_uops = {}
     fuzz = str(fuzz_linearizer(lin))
     c[fuzz] += 1
+    print(fuzz)
     if fuzz != "PASS":
       failed.append(i)
   print(f"{tested=}")
