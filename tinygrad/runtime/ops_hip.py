@@ -45,7 +45,7 @@ class RawHIPBuffer(RawBufferCopyInOut, RawBufferTransfer):
 @diskcache
 def compile_hip(prg) -> bytes:
   prog = hip.hiprtcCreateProgram(prg, "<null>", [], [])
-  hip.hiprtcCompileProgram(prog, [f'--offload-arch={hip.hipGetDeviceProperties(HIP.default_device).gcnArchName}'])
+  hip.hiprtcCompileProgram(prog, [f'--offload-arch={hip.hipGetDeviceProperties(HIP.default_device).gcnArchName}', f'-g', '--save-temps'])
   return hip.hiprtcGetCode(prog)
 
 class HIPProgram:

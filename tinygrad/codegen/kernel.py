@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 
 class OptOps(Enum):
-  UPCAST = auto(); UPCASTMID = auto(); UNROLL = auto(); LOCAL = auto(); LASTLOCAL = auto(); GROUP = auto(); GROUPTOP = auto(); NOLOCALS = auto() # noqa: E702
+  UPCAST = auto(); UPCASTMID = auto(); UNROLL = auto(); LOCAL = auto(); LASTLOCAL = auto(); GROUP = auto(); GROUPTOP = auto(); NOLOCALS = auto(); GLOBAL=auto() # noqa: E702
   def __lt__(self, x:OptOps): return self.value < x.value
 
 @dataclass(frozen=True, order=True)
@@ -393,6 +393,36 @@ class Kernel:
         return True
     return False
 
+  def apply_l2swizzle(self):
+    if not self.tensor_core: return False
+    for tc in tensor_cores[self.opts.device]:
+      if not((tc.arch is None or tc.arch == os.uname().machine) and isinstance(self.reduceop.src[0], LazyOp)): continue
+      has_cast = tc.dtype_in != tc.dtype_out
+
+      if has_cast and not(isinstance(self.reduceop.src[0], LazyOp) and self.reduceop.src[0].op == UnaryOps.CAST and self.reduceop.src[0].arg[0] == tc.dtype_out): continue
+      break
+
+    has_cast = tc.dtype_in != tc.dtype_out
+    mul_op = self.reduceop.src[0].src[0] if has_cast else self.reduceop.src[0]
+    buf0, buf1 = self.bufs.index(cast(MemBuffer, mul_op.src[0].arg)), self.bufs.index(cast(MemBuffer, mul_op.src[1].arg))
+    buf0_strides, buf1_strides = self.sts[buf0].real_strides(), self.sts[buf1].real_strides()
+    axis_buf0 = [(i, self.full_shape[i], buf1_strides[i]) for i, s in enumerate(buf0_strides[:self.first_reduce]) if s == 0 and i < self.first_reduce - self.local_dims]
+    axis_buf1 = [(i, self.full_shape[i], buf0_strides[i]) for i, s in enumerate(buf1_strides[:self.first_reduce]) if s == 0 and i < self.first_reduce - self.local_dims]
+
+    if not (axis_buf0 and axis_buf1): return False
+    s0, s1 = axis_buf0[-1][0], axis_buf1[-1][0]  # TODO: select axis in smart way
+    if s0 > s1: s0, s1 = s1, s0
+    s1, s0 = s0, s1
+    swz0, swz1 = 1, 2
+    if self.full_shape[s0] % swz0 != 0 or self.full_shape[s1] % swz1 != 0: return False
+    print('L2 swizzle!')
+    if swz0 > 1: self.shift_to(s0, swz0, False, self.first_reduce-self.local_dims)
+    if swz1 > 1: self.shift_to(s1, swz1, False, self.first_reduce-self.local_dims)
+    self.shift_to(2, 2, True, 2)
+    self.shift_to(1, 2, False, 3)
+    self.simplify_ones()
+    return True
+
   def apply_opt(self, opt:Opt, simd=False):
     assert not self.dont_use_locals or opt.op not in {OptOps.LOCAL, OptOps.LASTLOCAL, OptOps.GROUP, OptOps.GROUPTOP, OptOps.UPCASTMID}, "not using locals"
     self.applied_opts.append(opt)
@@ -409,7 +439,10 @@ class Kernel:
     if simd: assert opt.op in [OptOps.LOCAL, OptOps.LASTLOCAL, OptOps.UNROLL, OptOps.UPCAST], "SIMD dims must be local or upcast"
     if simd: assert not self.group_for_reduce, "SIMD with group not supported"
     assert not (self.first_reduce - self.simd_local_dims <= axis < self.first_reduce or self.shape_len - self.upcasted <= axis < self.shape_len - self.upcasted + self.simd_upcasted), "cannot modify simd dims"
-    if opt.op == OptOps.LOCAL:        # cyan
+    if opt.op == OptOps.GLOBAL:        # blue
+      assert axis < self.first_reduce-self.local_dims, "only can global globals"
+      self.shift_to(axis, amt, insert_before=self.first_reduce - self.local_dims)
+    elif opt.op == OptOps.LOCAL:        # cyan
       assert self.opts.has_local, "target does not support local"
       assert axis < self.first_reduce, "can't local a reduce"
       self.shift_to(axis, amt, insert_before=self.first_reduce - self.simd_local_dims if not simd else self.first_reduce)

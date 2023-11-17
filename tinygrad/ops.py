@@ -356,13 +356,16 @@ def get_optimized_program(linearizer_opts:LinearizerOptions, to_program, ast:Laz
 
       lins = [(("tc" if used_tensor_cores else "hc"), k)]
       if used_tensor_cores:
+        k_ = lins[-1][1].copy()
+        k_.apply_l2swizzle()
+        lins.append(("tc_swz", k_))
         lins.append(("hc", k_ := Linearizer(ast, linearizer_opts)))
         k_.hand_coded_optimizations()
 
       beam_starts = []
 
-      beam_starts.append(("", kb_ := Linearizer(ast, linearizer_opts)))
-      kb_.required_optimizations()
+      #beam_starts.append(("", kb_ := Linearizer(ast, linearizer_opts)))
+      #kb_.required_optimizations()
 
       if used_tensor_cores:
         beam_starts.append(("tc", kb_tc := Linearizer(ast, linearizer_opts)))
@@ -371,9 +374,17 @@ def get_optimized_program(linearizer_opts:LinearizerOptions, to_program, ast:Laz
       from tinygrad.features.search import beam_search, time_linearizer
       for name, kb in beam_starts:
         lins.append((f"beam{BEAM.value}" + (f"_{name}" if name else ""), beam_search(kb, test_rawbuffers, BEAM.value, bool(getenv("BEAM_ESTIMATE", 1)), variant=name)))
+
+        if name == "tc":
+          linname, kb = lins[-1]
+          kswz = kb.copy()
+          l2swz = kswz.apply_l2swizzle()
+          if l2swz: lins.append((f"{linname}_swz", kswz))
       timed = sorted([(nm, tk, time_linearizer(tk, test_rawbuffers, allow_test_size=False, disable_cache=True, clear_l2=True)) for nm, tk in lins], key=lambda x: x[2])
       if DEBUG >= 1: print("  <  ".join(f"{nm:6s} : {lin.colored_shape(30, dense=True)} : {tm*1e6:8.2f} us" for nm, lin, tm in timed))
       k = timed[0][1]
+    else:
+      if used_tensor_cores: k.apply_l2swizzle()
   else:
     k.required_optimizations()
   return to_program(k)
