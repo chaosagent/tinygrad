@@ -415,6 +415,20 @@ class Kernel:
     for axis in to_upcast[::-1]:
       self.apply_opt(Opt(OptOps.UPCAST, axis, 0))
 
+  def apply_l2swizzle(self):
+    s = 1000
+    for i, buf in enumerate(self.bufs):
+      if isinstance(buf, ConstBuffer): continue
+      rs = self.sts[i].real_strides()
+      if 0 in rs:
+        axis = rs.index(0)
+        s = min(s, axis)
+    swz = 2
+    if s == 1000 or self.full_shape[s] % swz != 0 or swz == 0 or s >= self.first_reduce - self.local_dims: return False
+    self.shift_to(s, swz, False, self.first_reduce-self.local_dims)
+    self.simplify_ones()
+    return True
+
 
   def apply_opt(self, opt:Opt, simd=False):
     assert not self.dont_use_locals or opt.op not in {OptOps.LOCAL, OptOps.LASTLOCAL, OptOps.GROUP, OptOps.GROUPTOP, OptOps.UPCASTMID}, "not using locals"
