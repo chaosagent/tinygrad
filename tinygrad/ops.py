@@ -216,6 +216,8 @@ class ASTRunner:
     lra = self.runtime_args.copy()
     if global_size: lra['global_size'] = global_size
     if local_size and 'local_size' not in lra: lra['local_size'] = local_size
+    if DEBUG >= 2:
+      for rawbuf in rawbufs: print(hex(rawbuf._buf))
     if et := self.clprg(*rawbufs, *var_vals.values(), **lra, wait=force_wait or DEBUG>=2): GlobalCounters.time_sum_s += et
     op_estimate = sym_infer(self.op_estimate, var_vals)
     mem_estimate = sym_infer(self.mem_estimate, var_vals)
@@ -299,7 +301,7 @@ class Compiled:
             lin2 = lin.copy()
             swzd = lin2.apply_l2swizzle()
             if swzd: lins.append((f"{name}_swz", lin2))
-          timed = sorted([(nm, tk, time_linearizer(tk, test_rawbuffers, allow_test_size=False, disable_cache=True, clear_l2=True)) for nm, tk in lins], key=lambda x: x[2])
+          timed = sorted([(nm, tk, time_linearizer(tk, test_rawbuffers, allow_test_size=False, disable_cache=True, clear_l2=True, cnt=20)) for nm, tk in lins], key=lambda x: x[2])
           if DEBUG >= 0: print("  <  ".join(f"{nm:6s} : {lin.colored_shape(30, dense=True)} : {tm*1e6:8.2f} us" for nm, lin, tm in timed))
           k = timed[0][1]
       else:

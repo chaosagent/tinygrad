@@ -66,7 +66,7 @@ def time_linearizer(lin:Linearizer, rawbufs:List[RawBuffer], allow_test_size=Tru
       print(lin.applied_opts)
     tms = [float('inf')]
   if CACHELEVEL >= 2: diskcache_put("time_linearizer", key, tms)
-  if DEBUG >= 2: print(lin.display_name, f"{min(tms) * 10**6:6.2f} us, {lin.info.flops / min(tms) / 10 ** 12:3.3f} tflop/s")
+  #if DEBUG >= 2: print(lin.display_name, f"{min(tms) * 10**6:6.2f} us, {lin.info.flops / min(tms) / 10 ** 12:3.3f} tflop/s")
   return min(tms)
 
 # get (scrap) buffers for timing the linearizer
@@ -119,6 +119,10 @@ def beam_search(lin:Linearizer, rawbufs, amt:int, allow_test_size=True, variant=
     ret = lin.copy()
     for o in val[len(lin.applied_opts):]: ret.apply_opt(o)
     return ret
+  elif False:
+    print('unsearched!')
+    lin.hand_coded_optimizations()
+    return lin
 
   # init the BEAM with the base linearizer
   beam: List[Tuple[Linearizer, float]] = [(lin, time_linearizer(lin, rawbufs, allow_test_size=allow_test_size))]

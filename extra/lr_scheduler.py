@@ -2,6 +2,7 @@ import math
 from typing import List
 from tinygrad.nn.optim import Optimizer
 from tinygrad.tensor import Tensor
+from tinygrad.helpers import dtypes
 
 class LR_Scheduler:
   def __init__(self, optimizer: Optimizer):
@@ -15,15 +16,36 @@ class LR_Scheduler:
     self.optimizer.lr.assign(self.get_lr()).realize()
 
 class MultiStepLR(LR_Scheduler):
-  def __init__(self, optimizer: Optimizer, milestones: List[int], gamma=0.1):
+  def __init__(self, optimizer: Optimizer, milestones: List[int], gamma=0.1, warmup=0):
     super().__init__(optimizer)
     self.milestones = milestones
     self.gamma = gamma
+    self.start = Tensor([float(optimizer.lr.numpy()[0])])
+    self.warmup = Tensor([float(warmup)])
 
   def get_lr(self) -> Tensor:
-    if self.epoch_counter.numpy()[0] not in self.milestones:
-      return self.optimizer.lr
-    return self.optimizer.lr * self.gamma
+    progress = Tensor(1.0)
+    for m in self.milestones:
+      progress = progress * (self.epoch_counter < float(m)).where(Tensor(1.0), self.gamma)
+    lr = self.start * progress
+    result = (self.epoch_counter < self.warmup).where(
+      self.epoch_counter / self.warmup * self.start,
+      lr
+    ).contiguous()
+    print(result)
+    return result
+
+class PolynomialLR(LR_Scheduler):
+  def __init__(self, optimizer: Optimizer, start_lr, end_lr, epochs, power=2):
+    super().__init__(optimizer)
+    self.start_lr = start_lr
+    self.end_lr = end_lr
+    self.epochs = epochs
+    self.power = power
+
+  def get_lr(self):
+    x= (1- (self.epoch_counter - 1)/self.epochs)
+    return (self.start_lr-self.end_lr)*x*x+self.end_lr
 
 class ReduceLROnPlateau(LR_Scheduler):
   def __init__(self, optimizer: Optimizer, mode="min", factor=0.1, patience=10, threshold=1e-4, threshold_mode="rel"):

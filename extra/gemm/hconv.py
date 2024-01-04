@@ -9,12 +9,14 @@ N = getenv("N", 224)
 CIN, COUT = getenv("CIN", 256), getenv("COUT", 256)
 K = getenv("K", 3)
 BS = getenv("BS", 1)
-ITER = getenv("ITER", 1)
+ITER = getenv("ITER", 10)
+STRIDE = getenv("STRIDE", 1)
+PADDING = getenv("STRIDE", (K-1)//2)
 
 x = Tensor.rand(BS, CIN, N, N, dtype=dtypes.half).realize()
-k = Tensor.rand(CIN, COUT, K, K, dtype=dtypes.half).realize()
+k = Tensor.rand(COUT, CIN, K, K, dtype=dtypes.half).realize()
 
-c = x.conv2d(k, padding=1)
+c = x.conv2d(k, padding=(K-1)//2)
 s = c.lazydata.schedule()
 si = s[-1]
 for _ in range(ITER):

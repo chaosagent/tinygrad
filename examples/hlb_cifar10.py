@@ -363,7 +363,7 @@ def train_cifar():
         for Xt, Yt in fetch_batches(X_test, Y_test, BS=EVAL_BS, is_train=False):
           # further split batch if distributed
           if getenv("DIST"):
-            Xt, Yt = Xt.chunk(min(world_size, 5), 0)[min(rank, 4)], Yt.chunk(min(world_size, 5), 0)[min(rank, 4)]
+            Xt, Yt = Xt.chunk(world_size, 0)[rank], Yt.chunk(world_size, 0)[rank]
 
           correct, loss = eval_step_jitted(model, Xt, Yt)
           losses.append(loss.numpy().tolist())
@@ -378,7 +378,7 @@ def train_cifar():
         if model_ema: correct_sum_ema, correct_len_ema = sum(corrects_ema), len(corrects_ema)
         if getenv("DIST"):
           if rank == 0:
-            for j in range(1, min(world_size, 5)):
+            for j in range(1, world_size):
               if model_ema:
                 recv_sum, recv_len, recv_sum_ema, recv_len_ema = OOB.recv(j)
               else:
@@ -388,7 +388,7 @@ def train_cifar():
               if model_ema:
                 correct_sum_ema += recv_sum_ema
                 correct_len_ema += recv_len_ema
-          elif rank < min(world_size, 5):
+          elif rank < world_size:
             if model_ema:
               OOB.send((correct_sum, correct_len, correct_sum_ema, correct_len_ema), 0)
             else:
@@ -438,7 +438,7 @@ if __name__ == "__main__":
     assert BS % world_size == 0, f"batch size {BS} is not divisible by world size {world_size}"
 
     # ensure that the evaluation batch size is divisible by the number of devices
-    assert EVAL_BS % min(world_size, 5) == 0, f"evaluation batch size {EVAL_BS} is not divisible by world size {min(world_size, 5)}"
+    assert EVAL_BS % world_size == 0, f"evaluation batch size {EVAL_BS} is not divisible by world size {world_size}"
 
     # init out-of-band communication
     dist.init_oob(world_size)

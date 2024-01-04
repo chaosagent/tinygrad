@@ -7,6 +7,7 @@ import numpy as np
 from PIL import Image
 import functools, pathlib
 from itertools import repeat
+from tinygrad.helpers import getenv
 
 BASEDIR = pathlib.Path(__file__).parent / "imagenet"
 ci = json.load(open(BASEDIR / "imagenet_class_index.json"))
@@ -15,11 +16,13 @@ cir = {v[0]: int(k) for k,v in ci.items()}
 @functools.lru_cache(None)
 def get_train_files():
   train_files = glob.glob(str(BASEDIR / "train/*/*"))
+  if getenv("TEST"): train_files=train_files[:getenv("TEST")]
   return train_files
 
 @functools.lru_cache(None)
 def get_val_files():
   val_files = glob.glob(str(BASEDIR / "val/*/*"))
+  if getenv("TEST_VAL"): val_files=val_files[:getenv("TEST")]
   return val_files
 
 def normalization(img):

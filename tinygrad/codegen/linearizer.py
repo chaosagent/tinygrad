@@ -151,15 +151,16 @@ class Linearizer(Kernel):
     # no new opts and we already ran? skip relinearizing
     if self.applied_opts == self.applied_opts_cache: return self
 
+
+    # save backups
+    bufs_backup, local_alias_backup, sts_backup, gfr_backup, upc_backup = self.bufs[:], {**self.local_alias}, self.sts[:], self.group_for_reduce[:], self.upcasted
+
     if self.tensor_core is not None:
       # alias buffer
       buf0, buf1 = self.tensor_core_buffers
       alias_pattern = [0] * (self.global_dims + (self.local_dims - len(self.tensor_core.threads))) + [2] * (len(self.tensor_core.threads)) + [0] * (self.shape_len - self.upcasted - self.first_reduce) + [1, 1] + [3] * (self.upcasted - 2)
       self.alias_buffer(buf0, alias_pattern)
       self.alias_buffer(buf1, alias_pattern)
-
-    # save backups
-    sts_backup, gfr_backup, upc_backup = self.sts[:], self.group_for_reduce[:], self.upcasted
 
     # global uop cache
     self.saved_exprs: Dict[Tuple, UOp] = dict()
@@ -193,7 +194,7 @@ class Linearizer(Kernel):
     # kernel name (before late upcast)
     self.function_name = ("r_" if self.reduceop else "E_") + '_'.join([str(x) if isinstance(x, int) else sym_rename(x) for x in self.full_shape])
     self.display_name = ("r_" if self.reduceop else "E_") + colored('_', 'BLACK').join([colored(str(x), c) for x,c in zip(self.full_shape, self.colors())])
-    #print(self.display_name)
+    #if DEBUG >= 2: print(self.display_name)
 
     # name the function something unique
     Linearizer.kernel_cnt[self.function_name] += 1
@@ -476,7 +477,7 @@ class Linearizer(Kernel):
       graph_uops(self.uops)
 
     # restore backups
-    self.sts, self.group_for_reduce, self.upcasted = sts_backup, gfr_backup, upc_backup
+    self.bufs, self.local_alias, self.sts, self.group_for_reduce, self.upcasted = bufs_backup, local_alias_backup, sts_backup, gfr_backup, upc_backup
 
     # set cache and return
     self.applied_opts_cache = self.applied_opts[:]

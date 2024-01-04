@@ -8,13 +8,15 @@ from tinygrad.features.search import time_linearizer
 import numpy as np
 
 N = getenv("N", 2048)
+M = getenv("M", N)
+K = getenv("K", N)
 BS = getenv("BS", 1)
 ITER = getenv("ITER", 10)
 
-a = Tensor.rand(BS, N, N, dtype=dtypes.half).realize()
-b = Tensor.rand(BS, N, N, dtype=dtypes.half).realize()
+a = Tensor.rand(BS, N, K, dtype=dtypes.half).realize()
+b = Tensor.rand(BS, K, M, dtype=dtypes.half).realize()
 
-c = (a.reshape((BS, N, 1, N)) * b.permute([0, 2, 1]).reshape((BS, 1, N, N))).cast(dtypes.float).sum(axis=-1).cast(dtypes.half)
+c = (a.reshape((BS, N, 1, K)) * b.permute([0, 2, 1]).reshape((BS, 1, M, K))).cast(dtypes.float).sum(axis=-1).cast(dtypes.half)
 s = c.lazydata.schedule()
 c.realize()
 si = s[-1]
