@@ -183,7 +183,8 @@ class Tensor:
 
   @staticmethod
   def _loadop(op, shape, device:Optional[str]=None, dtype:Optional[DType]=None, arg=None, **kwargs):
-    return Tensor(LazyBuffer.loadop(op, shape, dtype or dtypes.default_float, Device.canonicalize(device), arg), dtype=dtype, device=device, **kwargs)
+    device = tuple(Device.canonicalize(x) for x in device) if isinstance(device, (tuple, list)) else Device.canonicalize(device)
+    return Tensor(_loadop(op, shape, dtype or dtypes.default_float, device, arg), dtype=dtype, device=device, **kwargs)
 
   @staticmethod
   def empty(*shape, **kwargs): return Tensor._loadop(LoadOps.EMPTY, argfix(*shape), **kwargs)
@@ -266,7 +267,9 @@ class Tensor:
     assert replacement or num_samples == 1, "no replacement only supports num_samples = 1"
     weight = self.unsqueeze(0) if self.ndim == 1 else self
     cdf = (cw := weight.cumsum(1).float()) / cw[:, -1].unsqueeze(1)
-    unif_samples = Tensor.rand(num_samples, cdf.shape[0], 1)
+    print(self.device)
+    print(self.lazydata)
+    unif_samples = Tensor.rand(num_samples, cdf.shape[0], 1, device=self.device)
     indices = (unif_samples.expand((-1, -1, cdf.shape[1])) >= cdf).sum(2).permute((1, 0))
     return (indices.squeeze(0) if self.ndim == 1 else indices).cast(dtypes.default_int)
 

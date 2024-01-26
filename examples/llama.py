@@ -194,7 +194,8 @@ class LLaMa:
     toks = [self.tokenizer.bos_id()] + self.tokenizer.encode(prompt)
     start_pos = 0
     for i in range(max_length):
-      probs = llama.model(Tensor([toks[start_pos:]]), start_pos, temperature).realize()
+      print(llama.model.tok_embeddings.weight.device)
+      probs = llama.model(Tensor([toks[start_pos:]], device=llama.model.tok_embeddings.weight.device), start_pos, temperature).realize()
       probs_np = probs.numpy()
       tok = int(np.random.choice(len(probs_np), p=probs_np))
       start_pos = len(toks)
@@ -392,7 +393,7 @@ After you are done speaking, output [EOS]. You are not Chad.
 
     print(f"Preparing KV cache for chatbot with personality {args.personality}...")
     with Timing():
-      llama.model(Tensor([toks]), 0, args.temperature).realize()  # NOTE: outputs are not used
+      llama.model(Tensor([toks], device=llama.model.tok_embeddings.weight.device), 0, args.temperature).realize()  # NOTE: outputs are not used
     start_pos = len(toks)
   else:
     # non chat bot mode
