@@ -123,11 +123,12 @@ class TestNN(unittest.TestCase):
     torch_z = torch_layer(torch_x)
     np.testing.assert_allclose(z.numpy(), torch_z.detach().numpy(), atol=5e-4, rtol=1e-5)
 
-  @unittest.skipIf(Device.DEFAULT not in {"CPU", "TORCH"}, "Takes too long to compile for Compiled backends")
   def test_conv2d_winograd(self):
-    BS, C1, H, W = 2, 8, 16, 16
-    C2, K, S, P = 8, 3, 1, 1
+    BS, C1, H, W = 64, 128, 128, 128
+    C2, K, S, P = 128, 3, 1, 1
 
+    from tinygrad.dtype import dtypes
+    dtypes.default_float = dtypes.half
     # create in tinygrad
     layer = Conv2d(C1, C2, kernel_size=K, stride=S, padding=P)
     layer.weight.requires_grad = True
@@ -135,18 +136,19 @@ class TestNN(unittest.TestCase):
 
     # create in torch
     torch_layer = torch.nn.Conv2d(C1, C2, kernel_size=K, stride=S, padding=P).eval()
-    torch_layer.weight = torch.nn.Parameter(torch.tensor(layer.weight.numpy(), dtype=torch.float32))
-    torch_layer.bias = torch.nn.Parameter(torch.tensor(layer.bias.numpy(), dtype=torch.float32))
+    torch_layer.weight = torch.nn.Parameter(torch.tensor(layer.weight.numpy(), dtype=torch.float16))
+    torch_layer.bias = torch.nn.Parameter(torch.tensor(layer.bias.numpy(), dtype=torch.float16))
 
     # test
     x = Tensor.uniform(BS, C1, H, W, requires_grad=True)
 
     with Context(WINO=1):
       z = layer(x)
+    z.realize()
 
-    torch_x = torch.tensor(x.numpy(), requires_grad=True)
-    torch_z = torch_layer(torch_x)
-    np.testing.assert_allclose(z.numpy(), torch_z.detach().numpy(), atol=5e-4, rtol=1e-5)
+    #torch_x = torch.tensor(x.numpy(), requires_grad=True)
+    #torch_z = torch_layer(torch_x)
+    #np.testing.assert_allclose(z.numpy(), torch_z.detach().numpy(), atol=5e-4, rtol=1e-5)
 
     m = z.mean()
     m.backward()

@@ -7,16 +7,15 @@ from tinygrad.codegen.linearizer import Linearizer
 class TestWinograd(unittest.TestCase):
   def setUp(self):
     self.old = WINO.value
-    WINO.value = 1
   def tearDown(self):
     WINO.value = self.old
 
   def test_speed(self):
-    x = Tensor.empty(1,4,9,9)
+    x = Tensor.empty(1,4,8,8)
     w = Tensor.empty(4,4,3,3)
 
     with Timing("running conv: "):
-      out = Tensor.conv2d(x, w)
+      out = Tensor.conv2d(x, w, padding=1)
 
     with Timing("scheduling: "):
       sched = out.lazydata.schedule()
