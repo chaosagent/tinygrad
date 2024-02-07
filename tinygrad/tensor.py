@@ -703,10 +703,23 @@ class Tensor:
           kron_column = kron_column * col[idx]
         r = r + kron_column * expanded_t[mat_is]  # fancy indexing
       return r
+    def apply_matrix(mat, t, dims=len(HW)):
+      mat.to_(t.device)
+      mat = mat.cast(dtypes.default_float)
+
+      expanded_t = t.reshape((1,)*dims+t.shape).expand((mat.shape[0],)*dims+t.shape)
+
+      r = 1
+      for dim in range(dims):
+        this_shape = [1] * len(expanded_t.shape)
+        this_shape[dim] = expanded_t.shape[dim]
+        this_shape[dim+dims] = expanded_t.shape[dim+dims]
+        r = r * mat.reshape(this_shape).expand(expanded_t.shape)
+      r = r * expanded_t
+      r = r.sum(axis=list(range(dims,2*dims)))
+      return r
+
     HWI, HWO = (6,) * len(HW), (4,) * len(HW)  # F(4x4,3x3) winograd tiles
-    winograd_Bt = [[4, 0, -5, 0, 1, 0], [0, -4, -4, 1, 1, 0], [0, 4, -4, -1, 1, 0], [0, -2, -1, 2, 1, 0], [0, 2, -1, -2, 1, 0], [0, 4, 0, -5, 0, 1]]
-    winograd_G = [[1/4, 0, 0], [-1/6, -1/6, -1/6], [-1/6, 1/6, -1/6], [1/24, 1/12, 1/6], [1/24, -1/12, 1/6], [0, 0, 1]]
-    winograd_At = [[1, 1, 1, 1, 1, 0], [0, 1, -1, 2, -2, 0], [0, 1, 1, 4, 4, 0], [0, 1, -1, 8, -8, 1]] # applying At in pre-order doubles compile time
 
     # todo: stride == dilation
     # use padding to round up to 4x4 output tiles
@@ -1020,3 +1033,7 @@ def custom_random(out:Buffer):
   rng = np.random.default_rng(Tensor._seed)
   rng_np_buffer = rng.random(size=out.size, dtype=np.float32).astype(dtype=out.dtype.np, copy=False)
   out.copyin(rng_np_buffer.data)
+
+winograd_Bt = Tensor([[4, 0, -5, 0, 1, 0], [0, -4, -4, 1, 1, 0], [0, 4, -4, -1, 1, 0], [0, -2, -1, 2, 1, 0], [0, 2, -1, -2, 1, 0], [0, 4, 0, -5, 0, 1]], dtype=dtypes.default_float, requires_grad=False)
+winograd_G = Tensor([[1 / 4, 0, 0], [-1 / 6, -1 / 6, -1 / 6], [-1 / 6, 1 / 6, -1 / 6], [1 / 24, 1 / 12, 1 / 6], [1 / 24, -1 / 12, 1 / 6], [0, 0, 1]], dtype=dtypes.default_float, requires_grad=False)
+winograd_At = Tensor([[1, 1, 1, 1, 1, 0], [0, 1, -1, 2, -2, 0], [0, 1, 1, 4, 4, 0], [0, 1, -1, 8, -8, 1]], dtype=dtypes.default_float, requires_grad=False)
