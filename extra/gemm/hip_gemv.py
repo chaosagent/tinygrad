@@ -1,7 +1,7 @@
 import time
 import numpy as np
 from tinygrad import dtypes, Tensor
-from tinygrad.helpers import getenv, prod, flat_mv, Context
+from tinygrad.helpers import getenv, prod, flat_mv, Context, DEBUG
 from tinygrad.runtime.ops_hip import HIPAllocator, HIPDevice, HIPProgram, compile_hip
 from tinygrad.renderer.cstyle import HIPLanguage
 from tinygrad.device import CompiledASTRunner, Device, Buffer
@@ -44,7 +44,7 @@ src = (f"""
 typedef float float8 __attribute__((ext_vector_type(8)));
 typedef _Float16 half16 __attribute__((ext_vector_type(16)));
 {HIPLanguage.kernel_prefix}
-void __launch_bounds__ ({32 * LX}) test(float* c, half* a, half* b) {{
+void __launch_bounds__ ({16 * LX}) test(float* c, half* a, half* b) {{
   const int gx = {HIPLanguage.code_for_workitem['g'](0)} * {LX} + {HIPLanguage.code_for_workitem['l'](1)};
 
   const int lIdx = {HIPLanguage.code_for_workitem['l'](0)};
@@ -53,50 +53,63 @@ void __launch_bounds__ ({32 * LX}) test(float* c, half* a, half* b) {{
   c += gx*{KX*16} + lane;
   a += gx*{KX*16}*{N};
 
-  half16 a_frag[{KX}];
-  half16 b_frag;
-  #ifdef F32
-    float8 c_frag[{KX}] = {{}};
-  #else
-    half16 c_frag[{KX}] = {{}};
-  #endif
+  half16 a_frag[{KX}], a_frag1[{KX}];
+  half16 b_frag, b_frag1;
+  float c_frag[{KX}] = {{}};
+  for (int ele = 0; ele < 16; ++ele) {{
+    for (int x = 0; x < {KX}; x++) {{
+      a_frag1[x][ele] = a[(0+ele) + x*{16*N} + {N}*lane];
+    }}
+  }}
+  for (int ele = 0; ele < 16; ++ele) {{
+    b_frag1[ele] = b[0+ele];
+  }}
 
   for (int k = 0; k < {N}; k += 16) {{
     {HIPLanguage.barrier}
+    
+    // swap regs
     for (int ele = 0; ele < 16; ++ele) {{
       for (int x = 0; x < {KX}; x++) {{
-        a_frag[x][ele] = a[(k+ele) + x*{16*N} + {N}*lane];
+        a_frag[x][ele] = a_frag1[x][ele];
       }}
     }}
     for (int ele = 0; ele < 16; ++ele) {{
-      b_frag[ele] = b[k+ele];
+      b_frag[ele] = b_frag1[ele];
     }}
-    for (int x = 0; x < {KX}; x++) {{
-      #ifdef F32
-        c_frag[x] = __builtin_amdgcn_wmma_f32_16x16x16_f16_w32(b_frag, a_frag[x], c_frag[x]);
-      #else
-        c_frag[x] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w32(b_frag, a_frag[x], c_frag[x], false);
-      #endif
+    
+    if (k+16 < {N}) {{
+      // load next regs
+      for (int ele = 0; ele < 16; ++ele) {{
+        for (int x = 0; x < {KX}; x++) {{
+          a_frag1[x][ele] = a[(k+ele+16) + x*{16*N} + {N}*lane];
+        }}
+      }}
+      for (int ele = 0; ele < 16; ++ele) {{
+        b_frag1[ele] = b[k+ele+16];
+      }}
+    }}
+    
+    // mul
+    for (int ele = 0; ele < 16; ele++) {{
+      for (int x = 0; x < {KX}; x++) {{
+        c_frag[x] = ((float) a_frag[x][ele]) * ((float) b_frag[ele]) + c_frag[x];
+      }}
     }}
   }}
-
-  if (lIdx / 16 == 0) {{
-    for (int x = 0; x < {KX}; x++) {{
-      #ifdef F32
-        c[x*16] = c_frag[x][0];
-      #else
-        c[x*16] = c_frag[x][0];
-      #endif
-    }}
+  
+  for (int x = 0; x < {KX}; x++) {{
+    c[x*16] = c_frag[x];
   }}
 }}""")
 lib = compile_hip(src)
 
-global_size, local_size = [N//(KX*16*LX), 1, 1], [32, LX, 1]
+global_size, local_size = [N//(KX*16*LX), 1, 1], [16, LX, 1]
 print("global/local size", global_size, local_size, f"local_size:{prod(local_size)} total_size:{prod(global_size+local_size)}")
 binary = HIPProgram(device.device, "test", lib)
 prog = CompiledASTRunner(None, "test", src, device, global_size=global_size, local_size=local_size, precompiled=lib)
 
+if DEBUG >= 6: exit(0)
 scratch = Tensor.rand(1024, 1024, 128, device=device.dname).realize()  # 7900 xtx l3 cache is 96mb
 
 def timeit(fxn):
