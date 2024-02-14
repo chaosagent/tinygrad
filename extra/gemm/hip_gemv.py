@@ -19,12 +19,13 @@ from tinygrad import TinyJit
 # KY=2 KX=2 N=2048 python3 extra/gemm/hip_matmul.py
 #   4194304    324.76 us, would be  52899.88 GFLOPS matmul, 154.98 GB/s
 
-N = getenv("N", 16384)
+N = getenv("N", 24576)
 KX = getenv("KX", 1)
 LX = getenv("LX", 1)
+MBLOCK = getenv("MBLOCK", 32)
 assert N%(16*KX) == 0, f"N must be multiple of {16*KX}"
 FLOPS = N*N*2*16  # mul and acc times wasted wmma slots
-BW = N*N*2 + N*4 + N*N*2//(16*KX*LX)  # include vector and output bw
+BW = N*N*2 + N*4 + N*N*2//(MBLOCK*KX*LX)  # include vector and output bw
 MBW = N*N*2  # only matrix bw
 
 # Can HIPAllocator initialized as device=0 by default?
@@ -44,21 +45,21 @@ src = (f"""
 typedef float float8 __attribute__((ext_vector_type(8)));
 typedef _Float16 half16 __attribute__((ext_vector_type(16)));
 {HIPLanguage.kernel_prefix}
-void __launch_bounds__ ({16 * LX}) test(float* c, half* a, half* b) {{
+void __launch_bounds__ ({MBLOCK * LX}) test(float* c, half* a, half* b) {{
   const int gx = {HIPLanguage.code_for_workitem['g'](0)} * {LX} + {HIPLanguage.code_for_workitem['l'](1)};
 
   const int lIdx = {HIPLanguage.code_for_workitem['l'](0)};
-  const int lane = lIdx%16;
+  const int lane = lIdx;
 
-  c += gx*{KX*16} + lane;
-  a += gx*{KX*16}*{N};
+  c += gx*{KX*MBLOCK} + lane;
+  a += gx*{KX*MBLOCK};
 
   half16 a_frag[{KX}], a_frag1[{KX}];
   half16 b_frag, b_frag1;
   float c_frag[{KX}] = {{}};
   for (int ele = 0; ele < 16; ++ele) {{
     for (int x = 0; x < {KX}; x++) {{
-      a_frag1[x][ele] = a[(0+ele) + x*{16*N} + {N}*lane];
+      a_frag1[x][ele] = a[(0+ele)*{N} + x*{MBLOCK} + lane];
     }}
   }}
   for (int ele = 0; ele < 16; ++ele) {{
@@ -82,7 +83,7 @@ void __launch_bounds__ ({16 * LX}) test(float* c, half* a, half* b) {{
       // load next regs
       for (int ele = 0; ele < 16; ++ele) {{
         for (int x = 0; x < {KX}; x++) {{
-          a_frag1[x][ele] = a[(k+ele+16) + x*{16*N} + {N}*lane];
+          a_frag1[x][ele] = a[(k+ele+16)*{N} + x*{MBLOCK} + lane];
         }}
       }}
       for (int ele = 0; ele < 16; ++ele) {{
@@ -99,12 +100,12 @@ void __launch_bounds__ ({16 * LX}) test(float* c, half* a, half* b) {{
   }}
   
   for (int x = 0; x < {KX}; x++) {{
-    c[x*16] = c_frag[x];
+    c[x*{MBLOCK}] = c_frag[x];
   }}
 }}""")
 lib = compile_hip(src)
 
-global_size, local_size = [N//(KX*16*LX), 1, 1], [16, LX, 1]
+global_size, local_size = [N//(KX*MBLOCK*LX), 1, 1], [MBLOCK, LX, 1]
 print("global/local size", global_size, local_size, f"local_size:{prod(local_size)} total_size:{prod(global_size+local_size)}")
 binary = HIPProgram(device.device, "test", lib)
 prog = CompiledASTRunner(None, "test", src, device, global_size=global_size, local_size=local_size, precompiled=lib)
@@ -131,6 +132,6 @@ assert len(test_fn.jit_cache) == 1
 tm = min([timeit(lambda: prog([a, b, c], {}, wait=True)) for _ in range(1000)])
 hipallocator.copyout(flat_mv(na.data),a._buf)
 na = na.reshape(N,1)
-comp = nb.astype(np.float32) @ nc.astype(np.float32)
+comp = nb.astype(np.float32).transpose(1,0) @ nc.astype(np.float32)
 print(f"{N*N:10d} {tm*1e6:9.2f} us, would be {FLOPS*1e-9/tm:9.2f} GFLOPS matmul, {BW*1e-9/tm:.2f} GB/s, {MBW*1e-9/tm:.2f} matrix GB/s")
 np.testing.assert_allclose(na, comp, atol=1e-2, rtol=1e-2)
