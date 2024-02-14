@@ -20,8 +20,8 @@ from tinygrad import TinyJit
 #   4194304    324.76 us, would be  52899.88 GFLOPS matmul, 154.98 GB/s
 
 N = getenv("N", 24576)
-KX = getenv("KX", 2)
-LX = getenv("LX", 2)
+KX = getenv("KX", 4)
+LX = getenv("LX", 1)
 MBLOCK = getenv("MBLOCK", 32)
 KBLOCK = getenv("KBLOCK", 12)
 assert N%(KBLOCK*KX) == 0, f"N must be multiple of {KBLOCK*KX}"
