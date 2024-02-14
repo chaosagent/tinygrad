@@ -1,0 +1,62 @@
+diff --git a/extra/gemm/hip_gemv.py b/extra/gemm/hip_gemv.py
+index 72ad8cd3..07522ee5 100644
+--- a/extra/gemm/hip_gemv.py
++++ b/extra/gemm/hip_gemv.py
+@@ -55,16 +55,16 @@ void __launch_bounds__ ({MBLOCK * LX}) test(float* c, half* a, half* b) {{
+   c += gx*{KX*MBLOCK} + lane*{KX};
+   a += gx*{KX*MBLOCK};
+ 
+-  half{KBLOCK} a_frag[{KX}], a_frag1[{KX}];
+-  half{KBLOCK} b_frag, b_frag1;
+-  float c_frag[{KX}] = {{}};
++  half{KX} a_frag[{KBLOCK}], a_frag1[{KBLOCK}];
++  half b_frag[{KBLOCK}], b_frag1[{KBLOCK}];
++  float{KX} c_frag = {{}};
+   for (int ele = 0; ele < {KBLOCK}; ++ele) {{
+-    for (int x = 0; x < {KX}; x++) {{
+-      a_frag1[x][ele] = a[(0+ele)*{N} + x + lane*{KX}];
+-    }}
++    b_frag1[ele] = b[0+ele];
+   }}
+   for (int ele = 0; ele < {KBLOCK}; ++ele) {{
+-    b_frag1[ele] = b[0+ele];
++    for (int x = 0; x < {KX}; x++) {{
++      a_frag1[ele][x] = a[(0+ele)*{N} + x + lane*{KX}];
++    }}
+   }}
+ 
+   for (int k = 0; k < {N}; k += {KBLOCK}) {{
+@@ -73,7 +73,7 @@ void __launch_bounds__ ({MBLOCK * LX}) test(float* c, half* a, half* b) {{
+     // swap regs
+     for (int ele = 0; ele < {KBLOCK}; ++ele) {{
+       for (int x = 0; x < {KX}; x++) {{
+-        a_frag[x][ele] = a_frag1[x][ele];
++        a_frag[ele][x] = a_frag1[ele][x];
+       }}
+     }}
+     for (int ele = 0; ele < {KBLOCK}; ++ele) {{
+@@ -83,19 +83,19 @@ void __launch_bounds__ ({MBLOCK * LX}) test(float* c, half* a, half* b) {{
+     if (k+{KBLOCK} < {N}) {{
+       // load next regs
+       for (int ele = 0; ele < {KBLOCK}; ++ele) {{
+-        for (int x = 0; x < {KX}; x++) {{
+-          a_frag1[x][ele] = a[(k+ele+{KBLOCK})*{N} + x + lane*{KX}];
+-        }}
++        b_frag1[ele] = b[k+ele+{KBLOCK}];
+       }}
+       for (int ele = 0; ele < {KBLOCK}; ++ele) {{
+-        b_frag1[ele] = b[k+ele+{KBLOCK}];
++        for (int x = 0; x < {KX}; x++) {{
++          a_frag1[ele][x] = a[(k+ele+{KBLOCK})*{N} + x + lane*{KX}];
++        }}
+       }}
+     }}
+     
+     // mul
+     for (int ele = 0; ele < {KBLOCK}; ele++) {{
+       for (int x = 0; x < {KX}; x++) {{
+-        c_frag[x] = ((float) a_frag[x][ele]) * ((float) b_frag[ele]) + c_frag[x];
++        c_frag[x] = ((float) a_frag[ele][x]) * ((float) b_frag[ele]) + c_frag[x];
+       }}
+     }}
+   }}
