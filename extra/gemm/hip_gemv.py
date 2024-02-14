@@ -20,8 +20,8 @@ from tinygrad import TinyJit
 #   4194304    324.76 us, would be  52899.88 GFLOPS matmul, 154.98 GB/s
 
 N = getenv("N", 24576)
-KX = getenv("KX", 1)
-LX = getenv("LX", 1)
+KX = getenv("KX", 2)
+LX = getenv("LX", 2)
 MBLOCK = getenv("MBLOCK", 32)
 KBLOCK = getenv("KBLOCK", 12)
 assert N%(KBLOCK*KX) == 0, f"N must be multiple of {KBLOCK*KX}"
@@ -52,7 +52,7 @@ void __launch_bounds__ ({MBLOCK * LX}) test(float* c, half* a, half* b) {{
   const int lIdx = {HIPLanguage.code_for_workitem['l'](0)};
   const int lane = lIdx;
 
-  c += gx*{KX*MBLOCK} + lane;
+  c += gx*{KX*MBLOCK} + lane*{KX};
   a += gx*{KX*MBLOCK};
 
   half{KBLOCK} a_frag[{KX}], a_frag1[{KX}];
@@ -60,7 +60,7 @@ void __launch_bounds__ ({MBLOCK * LX}) test(float* c, half* a, half* b) {{
   float c_frag[{KX}] = {{}};
   for (int ele = 0; ele < {KBLOCK}; ++ele) {{
     for (int x = 0; x < {KX}; x++) {{
-      a_frag1[x][ele] = a[(0+ele)*{N} + x*{MBLOCK} + lane];
+      a_frag1[x][ele] = a[(0+ele)*{N} + x + lane*{KX}];
     }}
   }}
   for (int ele = 0; ele < {KBLOCK}; ++ele) {{
@@ -84,7 +84,7 @@ void __launch_bounds__ ({MBLOCK * LX}) test(float* c, half* a, half* b) {{
       // load next regs
       for (int ele = 0; ele < {KBLOCK}; ++ele) {{
         for (int x = 0; x < {KX}; x++) {{
-          a_frag1[x][ele] = a[(k+ele+{KBLOCK})*{N} + x*{MBLOCK} + lane];
+          a_frag1[x][ele] = a[(k+ele+{KBLOCK})*{N} + x + lane*{KX}];
         }}
       }}
       for (int ele = 0; ele < {KBLOCK}; ++ele) {{
@@ -101,7 +101,7 @@ void __launch_bounds__ ({MBLOCK * LX}) test(float* c, half* a, half* b) {{
   }}
   
   for (int x = 0; x < {KX}; x++) {{
-    c[x*{MBLOCK}] = c_frag[x];
+    c[x] = c_frag[x];
   }}
 }}""")
 lib = compile_hip(src)
