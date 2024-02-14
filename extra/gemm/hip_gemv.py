@@ -23,8 +23,9 @@ N = getenv("N", 24576)
 KX = getenv("KX", 1)
 LX = getenv("LX", 1)
 MBLOCK = getenv("MBLOCK", 32)
-assert N%(16*KX) == 0, f"N must be multiple of {16*KX}"
-FLOPS = N*N*2*16  # mul and acc times wasted wmma slots
+KBLOCK = getenv("KBLOCK", 12)
+assert N%(KBLOCK*KX) == 0, f"N must be multiple of {KBLOCK*KX}"
+FLOPS = N*N*2  # mul and acc
 BW = N*N*2 + N*4 + N*N*2//(MBLOCK*KX*LX)  # include vector and output bw
 MBW = N*N*2  # only matrix bw
 
@@ -43,7 +44,7 @@ hipallocator.copyin(c._buf, bytearray(nc))
 src = (f"""
 #define F32
 typedef float float8 __attribute__((ext_vector_type(8)));
-typedef _Float16 half16 __attribute__((ext_vector_type(16)));
+typedef _Float16 half{KBLOCK} __attribute__((ext_vector_type({KBLOCK})));
 {HIPLanguage.kernel_prefix}
 void __launch_bounds__ ({MBLOCK * LX}) test(float* c, half* a, half* b) {{
   const int gx = {HIPLanguage.code_for_workitem['g'](0)} * {LX} + {HIPLanguage.code_for_workitem['l'](1)};
@@ -54,45 +55,45 @@ void __launch_bounds__ ({MBLOCK * LX}) test(float* c, half* a, half* b) {{
   c += gx*{KX*MBLOCK} + lane;
   a += gx*{KX*MBLOCK};
 
-  half16 a_frag[{KX}], a_frag1[{KX}];
-  half16 b_frag, b_frag1;
+  half{KBLOCK} a_frag[{KX}], a_frag1[{KX}];
+  half{KBLOCK} b_frag, b_frag1;
   float c_frag[{KX}] = {{}};
-  for (int ele = 0; ele < 16; ++ele) {{
+  for (int ele = 0; ele < {KBLOCK}; ++ele) {{
     for (int x = 0; x < {KX}; x++) {{
       a_frag1[x][ele] = a[(0+ele)*{N} + x*{MBLOCK} + lane];
     }}
   }}
-  for (int ele = 0; ele < 16; ++ele) {{
+  for (int ele = 0; ele < {KBLOCK}; ++ele) {{
     b_frag1[ele] = b[0+ele];
   }}
 
-  for (int k = 0; k < {N}; k += 16) {{
+  for (int k = 0; k < {N}; k += {KBLOCK}) {{
     {HIPLanguage.barrier}
     
     // swap regs
-    for (int ele = 0; ele < 16; ++ele) {{
+    for (int ele = 0; ele < {KBLOCK}; ++ele) {{
       for (int x = 0; x < {KX}; x++) {{
         a_frag[x][ele] = a_frag1[x][ele];
       }}
     }}
-    for (int ele = 0; ele < 16; ++ele) {{
+    for (int ele = 0; ele < {KBLOCK}; ++ele) {{
       b_frag[ele] = b_frag1[ele];
     }}
     
-    if (k+16 < {N}) {{
+    if (k+{KBLOCK} < {N}) {{
       // load next regs
-      for (int ele = 0; ele < 16; ++ele) {{
+      for (int ele = 0; ele < {KBLOCK}; ++ele) {{
         for (int x = 0; x < {KX}; x++) {{
-          a_frag1[x][ele] = a[(k+ele+16)*{N} + x*{MBLOCK} + lane];
+          a_frag1[x][ele] = a[(k+ele+{KBLOCK})*{N} + x*{MBLOCK} + lane];
         }}
       }}
-      for (int ele = 0; ele < 16; ++ele) {{
-        b_frag1[ele] = b[k+ele+16];
+      for (int ele = 0; ele < {KBLOCK}; ++ele) {{
+        b_frag1[ele] = b[k+ele+{KBLOCK}];
       }}
     }}
     
     // mul
-    for (int ele = 0; ele < 16; ele++) {{
+    for (int ele = 0; ele < {KBLOCK}; ele++) {{
       for (int x = 0; x < {KX}; x++) {{
         c_frag[x] = ((float) a_frag[x][ele]) * ((float) b_frag[ele]) + c_frag[x];
       }}
