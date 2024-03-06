@@ -429,21 +429,33 @@ class TestSchedule(unittest.TestCase):
     out = x.contiguous() + y.contiguous()
     check_schedule(out, 2)
 
-  def test_sgd(self):
-    w = Tensor.full((2, 2), 1.0).contiguous().realize()
-    optimizer = nn.optim.SGD([w], momentum=0.9)
-    x = Tensor.full((2, 2), 1.0).contiguous().realize()
+  def _test_sgd(self, kernel_cnt, **opts):
+    w = Tensor.randn(2, 2).contiguous().realize()
+    optimizer = nn.optim.SGD([w], **opts)
+    def get_data():
+      return Tensor.randn(2, 2).contiguous().realize()
     def train_step(x):
+      optimizer.zero_grad()
       z = (w @ x).mean()
       z.backward()
       optimizer.step()
-    train_step(x)
+    train_step(get_data())
+    x = get_data()  # make sure data is fresh and not cached
     GlobalCounters.reset()
     train_step(x)
 
-    # kernel 1: pre-expand const multiplication (from where?)
-    # kernel 2: matmul
-    print(GlobalCounters.kernel_count)
+    assert GlobalCounters.kernel_count <= kernel_cnt
+  def test_sgd(self):
+    # kernel 1: pre-expand const multiplication: mean 1/4 * grad 1.0
+    # kernel 2: momentum update
+    # kernel 3: weight update
+    self._test_sgd(3, momentum=0.9)
+  def test_sgd_nesterov(self):
+    # kernel 1: pre-expand const multiplication: mean 1/4 * grad 1.0
+    # kernel 2: gradient calculation + weight decay
+    # kernel 3: momentum update
+    # kernel 4: weight update
+    self._test_sgd(3, momentum=0.9, nesterov=True)  # nesterov can diamond
 
 
 if __name__ == '__main__':
