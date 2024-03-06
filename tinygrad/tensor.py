@@ -114,6 +114,8 @@ class Tensor:
   # Python has a non moving GC, so this should be okay
   def __hash__(self): return id(self)
 
+  def __bool__(self): assert False, "__bool__ is not implemented for tensor; use is or id() to compare tensor identity"
+
   @property
   def device(self) -> Union[str, Tuple[str, ...]]: return self.lazydata.device
 

@@ -326,6 +326,23 @@ class TestTinygrad(unittest.TestCase):
       assert type(reshaped_item) == type(a), a
       np.testing.assert_allclose(reshaped_item, a), a
 
+  def test_contains_tensor(self):
+    # bool(tensor) is meaningless, but may be accidentally triggered by list __contains__
+    t1 = Tensor(1)
+    t2 = Tensor(2)
+    with self.assertRaises(AssertionError):
+      bool(t1)
+    with self.assertRaises(AssertionError):
+      l = [t2]
+      print(t1 in l)
+    # set / dict __contains__ compares hash(a) == hash(b) and (a is b) or (a and b).
+    # Tensor.__hash__ uses id(), so no collisions are possible, thus usage with Tensor is
+    # correct
+    l = {t1}
+    assert t1 in l
+    l = {t1: 0, t2: 1}
+    assert l[t1] == 0 and l[t2] == 1
+
 @unittest.skipIf(CI and Device.DEFAULT in {"GPU", "CUDA", "METAL"}, "no GPU CI")
 class TestMoveTensor(unittest.TestCase):
   d0, d1 = f"{Device.DEFAULT}:0", f"{Device.DEFAULT}:1"
