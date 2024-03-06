@@ -5,7 +5,7 @@
 import unittest
 from typing import List, Optional
 from tinygrad.tensor import Tensor
-from tinygrad.ops import LoadOps
+from tinygrad.ops import LoadOps, GlobalCounters
 from tinygrad.device import Device, Compiled
 from tinygrad.helpers import DEBUG, GRAPH
 from tinygrad.codegen.linearizer import Linearizer
@@ -428,6 +428,23 @@ class TestSchedule(unittest.TestCase):
     y = Tensor(2) + Tensor(2)
     out = x.contiguous() + y.contiguous()
     check_schedule(out, 2)
+
+  def test_sgd(self):
+    w = Tensor.full((2, 2), 1.0).contiguous().realize()
+    optimizer = nn.optim.SGD([w], momentum=0.9)
+    x = Tensor.full((2, 2), 1.0).contiguous().realize()
+    def train_step(x):
+      z = (w @ x).mean()
+      z.backward()
+      optimizer.step()
+    train_step(x)
+    GlobalCounters.reset()
+    train_step(x)
+
+    # kernel 1: pre-expand const multiplication (from where?)
+    # kernel 2: matmul
+    print(GlobalCounters.kernel_count)
+
 
 if __name__ == '__main__':
   unittest.main(verbosity=2)
