@@ -29,6 +29,7 @@ class LazyBuffer:
     if base is None:
       # properties on base
       self.op, self.arg, self.srcs = op, arg, srcs  # this is a LazyOp, except the src is LazyBuffers and not LazyOps
+      self.is_const = self.op == LoadOps.CONST or (len(srcs) and all(src.base.op == LoadOps.CONST or src.base.is_const for src in srcs))
       self.realized: Optional[Buffer] = None
       self.output_buffer: Optional[Buffer] = None
       self.contiguous_child: Optional[Tuple[ReferenceType[LazyBuffer], ShapeTracker]] = None
