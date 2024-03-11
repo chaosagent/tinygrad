@@ -121,11 +121,21 @@ class LazyBuffer:
     assert all(0 <= x < len(self.shape) for x in axis), f"axis args {axis} out of range for shape {self.shape}"
     axis = tuple(x for x in axis if self.shape[x] != 1)
     if len(axis) == 0: return self
-    new_shape = tuple(1 if i in axis else s for i,s in enumerate(self.shape))
-    return create_lazybuffer(self.device, ShapeTracker.from_shape(new_shape), self.dtype, op, axis, (self,))
+
+    # move reduces to front
+    shape_rest = tuple([i for i in range(len(self.shape)) if i not in axis])
+    reduces_in_front = self.srcs[0].permute(axis + shape_rest)
+    axis = tuple(range(len(axis)))
+
+    new_shape = tuple(1 if i in axis else s for i,s in enumerate(reduces_in_front.shape))
+    return create_lazybuffer(self.device, ShapeTracker.from_shape(new_shape), self.dtype, op, axis, (reduces_in_front,))
 
   def r(self, op:ReduceOps, axis:Tuple[int, ...]) -> LazyBuffer:
     new_shape = tuple(1 if i in axis else s for i,s in enumerate(self.shape))
+    if self.base.op == op:
+      # can combine reduces
+      pass
+
     # TODO: this logic should move to the scheduler
     if self.size == 0 and 0 not in new_shape: return self.const({ReduceOps.SUM: 0.0, ReduceOps.MAX: -math.inf}[op], new_shape)
     # TODO: can we split symbolic shape if the reduce axis is not symbolic?

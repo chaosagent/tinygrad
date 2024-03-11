@@ -427,5 +427,18 @@ class TestSchedule(unittest.TestCase):
     out = x.contiguous() + y.contiguous()
     check_schedule(out, 2)
 
+  def test_conv_backwards(self):
+    c1 = nn.Conv2d(3,16,3)
+    c1.weight.requires_grad = True
+    #c1.bias.requires_grad = True
+
+    # run
+    img = Tensor.rand(2,3,64,64, requires_grad=True)
+    c1(img).relu().mean().backward()
+    #check_schedule(c1.weight.grad, 3, [c1.weight, c1.bias])
+    #check_schedule(img.grad, 3, [c1.weight, c1.bias])
+    Tensor.corealize([img.grad, c1.weight.grad])
+
+
 if __name__ == '__main__':
   unittest.main(verbosity=2)

@@ -148,12 +148,24 @@ def _recurse_lb(buf:LazyBuffer, realizes:Set[LazyBuffer], allbufs:Dict[LazyBuffe
     buf.dtype = dtypes.float32  # NOTE: this is what makes the dtype above not match
   if buf.base != buf:
     # realize all places where the buffer is expanded
-    if prod(buf.base.st.shape) < prod(buf.st.shape):
-      if len(buf.st.views) == 1 and buf.st.views[-1].mask and all_int(buf.base.st.shape) and \
-          prod(buf.base.st.shape) >= prod([y-x for x,y in buf.st.views[-1].mask]):
-        simple_pads.add(buf.base)
-      else:
-        realizes.add(buf.base)
+    if (base_sz := prod(buf.base.st.shape)) < prod(buf.st.shape):
+      if all_int(buf.base.st.shape):
+        for view in buf.st.views:
+          # theoretically we can realize before shrink and expands that happen in the same st
+          if not all_int(view.shape):
+            realizes.add(buf.base)
+            break
+          if prod(view.shape) > base_sz:
+            print(prod(buf.base.st.shape), base_sz, buf.base.st.shape, view.shape)
+            if not (view.mask and prod([y-x for x,y in view.mask]) <= base_sz):
+              print(f'bad {buf.base.st.shape} {view.mask}')
+              realizes.add(buf.base)
+              break
+            base_sz = prod(view.shape)
+        else:
+          print('good')
+          print(buf.base.op)
+          simple_pads.add(buf.base)
     return _recurse_lb(buf.base, realizes, allbufs, simple_pads, children)
   if buf.forced_realize: realizes.add(buf)
   allbufs[buf] = None
