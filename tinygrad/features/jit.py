@@ -36,7 +36,7 @@ def get_jc_idxs_with_updatable_var_vals(jit_cache: List[JitItem]) -> List[int]:
 def apply_graph_to_jit(jit_cache: List[JitItem], input_rawbuffers: List[Buffer], var_vals: Dict[Variable, int]) -> List[JitItem]:
   # Split JIT cache into batches for faster graph execution.
   # This allows the accelerator to run some batches while subsequent graphs are still being updated.
-  max_batch_size = getenv("JIT_BATCH_SIZE", 32)
+  max_batch_size = getenv("JIT_BATCH_SIZE", 4)
   graphed_jit_cache: List[JitItem] = []
   current_batch: List[JitItem] = []
   current_device: Optional[Compiled] = None
@@ -46,7 +46,7 @@ def apply_graph_to_jit(jit_cache: List[JitItem], input_rawbuffers: List[Buffer],
     try:
       if len(current_batch) <= 1 or current_device is None: raise GraphException("only one kernel doesn't graph")
       graphed_jit_cache.append(JitItem(current_device.graph(current_batch, input_rawbuffers, var_vals), cast(List[Optional[Buffer]], input_rawbuffers))) # noqa: E501
-      max_batch_size *= 2
+      max_batch_size *= 4
       if DEBUG >= 2: print(f"\tJIT GRAPHing batch with {len(current_batch)} kernels on device {current_device}")
     except GraphException as e:
       graphed_jit_cache.extend(current_batch)
