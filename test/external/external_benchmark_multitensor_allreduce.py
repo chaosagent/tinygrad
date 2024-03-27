@@ -19,9 +19,11 @@ def test(devs: List[str], N: int, iters:int = 10):
   _jitted = TinyJit(_wrapped) if getenv("USEJIT", 1) == 1 else _wrapped
 
   secs, gflops, gbs = 0, 0, 0
+  lb_collect = []  # prevent buffers from getting freed, which causes weird delays in queueing sdma
   for i in range(-2, iters):
     GlobalCounters.reset()
     lbs = [Tensor.full((N,), float(1+i), device=d).contiguous().lazydata for i,d in enumerate(devs)]
+    lb_collect.append(lbs)
     realize(lbs)
     start = time.time()
     realize(_jitted(ReduceOps.SUM, Tensor(MultiLazyBuffer(lbs, 0), device=devs)).lazydata.lbs)
@@ -44,7 +46,7 @@ def main():
   dev, n_gpus = Device.DEFAULT, getenv("GPUS", 6) # number of gpus
   devs = tuple([f"{dev}:{x}" for x in range(n_gpus)])
 
-  sz = getenv("SZ", 1000) * 10**6 # size of data on each gpu
+  sz = getenv("SZ", 6 * 160) * 2 ** 20 # size of data on each gpu
   f32 = 4 # 4 bytes
   N = sz//f32
 
