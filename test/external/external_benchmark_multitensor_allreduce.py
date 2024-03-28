@@ -46,6 +46,7 @@ def main():
   dev, n_gpus = Device.DEFAULT, getenv("GPUS", 6) # number of gpus
   devs = tuple([f"{dev}:{x}" for x in range(n_gpus)])
 
+  # use LRU=0 for perfect overlap ;)
   sz = getenv("SZ", 6 * 160) * 2 ** 20 # size of data on each gpu
   f32 = 4 # 4 bytes
   N = sz//f32
