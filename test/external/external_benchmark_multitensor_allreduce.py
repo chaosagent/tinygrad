@@ -47,6 +47,7 @@ def main():
   devs = tuple([f"{dev}:{x}" for x in range(n_gpus)])
 
   # use LRU=0 for perfect overlap ;)
+  # LRU=0 JIT_BATCH_SIZE=2048 BEAM=2 python test/external/external_benchmark_multitensor_allreduce.py  # 14.76 GB/s
   sz = getenv("SZ", 6 * 160) * 2 ** 20 # size of data on each gpu
   f32 = 4 # 4 bytes
   N = sz//f32
