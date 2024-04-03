@@ -49,10 +49,10 @@ class Conv2d:
     self.bias = Tensor.uniform(out_channels, low=-bound, high=bound) if bias else None
 
   def __call__(self, x:Tensor):
-    return x.conv2d(self.weight, self.bias, padding=self.padding, stride=self.stride, dilation=self.dilation, groups=self.groups)
+    return x.conv2d(self.weight.permute(0, len(self.kernel_size) + 1, *range(1, len(self.kernel_size)+1)), self.bias, padding=self.padding, stride=self.stride, dilation=self.dilation, groups=self.groups)
 
   def initialize_weight(self, out_channels, in_channels, groups):
-    return Tensor.kaiming_uniform(out_channels, in_channels//groups, *self.kernel_size, a=math.sqrt(5))
+    return Tensor.kaiming_uniform(out_channels, *self.kernel_size, in_channels//groups, a=math.sqrt(5))
 
 def ConvTranspose1d(in_channels, out_channels, kernel_size, stride=1, padding=0, output_padding=0, dilation=1, groups=1, bias=True):
   return ConvTranspose2d(in_channels, out_channels, (kernel_size,), stride, padding, output_padding, dilation, groups, bias)

@@ -18,7 +18,7 @@ def he_normal(*shape, a: float = 0.00, **kwargs) -> Tensor:
 
 class Conv2dHeNormal(nn.Conv2d):
   def initialize_weight(self, out_channels, in_channels, groups):
-    return he_normal(out_channels, in_channels//groups, *self.kernel_size, a=0.0)
+    return he_normal(out_channels, *self.kernel_size, in_channels//groups, a=0.0)
 
 class Linear(nn.Linear):
   def __init__(self, in_features, out_features, bias=True):

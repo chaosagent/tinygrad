@@ -70,10 +70,10 @@ def helper_test_speed(f1, *args):
       save_ops, save_mem = GlobalCounters.global_ops, GlobalCounters.global_mem
   return ret.numpy() if isinstance(ret, Tensor) else ret.cpu().numpy(), np.min(ets)
 
-def helper_test_generic_square(name, N, f1, f2, onearg=False):
+def helper_test_generic_square(name, BS, M, N, K, f1, f2, onearg=False):
   torch.manual_seed(0)
-  torch_a = (torch.rand(N, N, dtype=torch_dt) - 0.5).to(torch_device)
-  torch_b = (torch.rand(N, N, dtype=torch_dt) - 0.5).to(torch_device) if not onearg else None
+  torch_a = (torch.rand(1, M, K, dtype=torch_dt) - 0.5).to(torch_device)
+  torch_b = (torch.rand(BS, K, N, dtype=torch_dt) - 0.5).to(torch_device) if not onearg else None
 
   tiny_a = Tensor(torch_a.cpu().numpy())
   tiny_b = Tensor(torch_b.cpu().numpy()) if not onearg else None
@@ -94,7 +94,7 @@ prefix = None
 def helper_test_generic(name, f1, f1_args, f2, f2_args):
   global prefix
   with torch.no_grad():
-    val_torch, et_torch = helper_test_speed(f1, *f1_args)
+    val_torch, et_torch = helper_test_speed(f2, *f2_args)
   val_tinygrad, et_tinygrad = helper_test_speed(f2, *f2_args)
 
   desc = "faster" if et_torch > et_tinygrad else "slower"
@@ -103,14 +103,14 @@ def helper_test_generic(name, f1, f1_args, f2, f2_args):
   print(("\r" if not CI else "")+f"{name:42s} {et_torch:7.2f} ms ({flops/et_torch:8.2f} GFLOPS {mem/et_torch:8.2f} GB/s) in torch, {et_tinygrad:7.2f} ms ({flops/et_tinygrad:8.2f} GFLOPS {mem/et_tinygrad:8.2f} GB/s) in tinygrad, {colorize_float(et_tinygrad/et_torch)} {desc} {flops:10.2f} MOPS {mem:8.2f} MB")  # noqa: E501
   np.testing.assert_allclose(val_tinygrad, val_torch, atol=1e-3, rtol=1e-3)
 
-def helper_test_conv(bs, in_chans, out_chans, kernel_size, img_size_y, img_size_x):
+def helper_test_conv(bs, in_chans, out_chans, kernel_size, img_size_y, img_size_x, padding=0, stride=1):
   torch.manual_seed(0)
   torch_dat = torch.rand(bs, in_chans, img_size_y, img_size_x, dtype=torch_dt).to(torch_device)
-  torch_conv = torch.nn.Conv2d(in_chans, out_chans, kernel_size, bias=None, dtype=torch_dt).to(torch_device)
+  torch_conv = torch.nn.Conv2d(in_chans, out_chans, kernel_size, bias=None, dtype=torch_dt, padding=padding, stride=stride).to(torch_device)
 
   tiny_dat = Tensor(torch_dat.cpu().numpy())
-  tiny_conv = Conv2d(in_chans, out_chans, kernel_size, bias=None)
-  tiny_conv.weight = Tensor(torch_conv.weight.detach().cpu().numpy())
+  tiny_conv = Conv2d(in_chans, out_chans, kernel_size, bias=None, padding=padding, stride=stride)
+  tiny_conv.weight = Tensor(torch_conv.weight.detach().cpu().numpy()).permute(0, 2, 3, 1).contiguous()
 
   def f1(torch_dat): return torch_conv(torch_dat)
   def f2(tiny_dat): return tiny_conv(tiny_dat).realize()
@@ -127,12 +127,12 @@ class TestBigSpeed(unittest.TestCase):
     helper_test_generic_square('exp', 8192, f, f, onearg=True)
   def test_gemm_2048(self):
     def f(a, b): return a @ b
-    helper_test_generic_square('gemm', 2048, f, f)
+    helper_test_generic_square('gemm', 64, 128, 128 * 128, 128, f, f)
   def test_gemm_4096(self):
     def f(a, b): return a @ b
     helper_test_generic_square('gemm', 4096, f, f)
   def test_large_conv_1x1(self): helper_test_conv(bs=32, in_chans=128, out_chans=128, kernel_size=1, img_size_y=128, img_size_x=128)
-  def test_large_conv_3x3(self): helper_test_conv(bs=4, in_chans=128, out_chans=128, kernel_size=3, img_size_y=130, img_size_x=130)
+  def test_large_conv_3x3(self): helper_test_conv(bs=256, in_chans=128, out_chans=128, kernel_size=3, img_size_y=128, img_size_x=128, padding=1, stride=2)
   def test_large_conv_5x5(self): helper_test_conv(bs=4, in_chans=128, out_chans=128, kernel_size=5, img_size_y=132, img_size_x=132)
   def test_matvec_4096_16384(self): helper_test_matvec('matvec_4096_16384', 4096, 16384)
   def test_matvec_16384_4096(self): helper_test_matvec('matvec_16384_4096', 16384, 4096)

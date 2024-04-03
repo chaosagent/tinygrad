@@ -349,26 +349,28 @@ class Kernel:
           return None
         if (buf0:=buf_index(mul_op.src[0])) is None or (buf1:=buf_index(mul_op.src[1])) is None: continue
 
-        buf0_strides, buf1_strides, reduce_sz = self.sts[buf0].real_strides(), self.sts[buf1].real_strides(), self.full_shape[self.first_reduce]
+        buf0_strides, buf1_strides, reduce_szs = self.sts[buf0].real_strides(), self.sts[buf1].real_strides(), self.full_shape[self.first_reduce:self.shape_len-self.upcasted]
         axis_buf0 = [(i,self.full_shape[i],buf1_strides[i]) for i,s in enumerate(buf0_strides[:self.first_reduce]) if s == 0 and self.full_shape[i]%tc.dims[0] == 0]  # noqa: E501
         axis_buf1 = [(i,self.full_shape[i],buf0_strides[i]) for i,s in enumerate(buf1_strides[:self.first_reduce]) if s == 0 and self.full_shape[i]%tc.dims[1] == 0]  # noqa: E501
-        if not(axis_buf0 and axis_buf1 and reduce_sz%tc.dims[2] == 0 and reduce_sz >= tc.dims[2]): continue
+        reduce_szs = [(i, sz) for i, sz in enumerate(reduce_szs) if sz % tc.dims[2] == 0 and sz >= tc.dims[2]]
+        if not(axis_buf0 and axis_buf1 and reduce_szs): continue
         if not((self.shape_len-self.first_reduce) == 1 or (opt_level >= 1)): continue
 
-        axis_choices = list(itertools.product(axis_buf0, axis_buf1))
+        axis_choices = list(itertools.product(axis_buf0, axis_buf1, reduce_szs))
         if not(axis < len(axis_choices)): continue
 
-        s0, s1 = axis_choices[-(axis+1)][0][0], axis_choices[-(axis+1)][1][0] # s0 is n, s1 is m
+        s0, s1, sr = axis_choices[-(axis+1)][0][0], axis_choices[-(axis+1)][1][0], axis_choices[-(axis+1)][2][0] # s0 is n, s1 is m
         assert s0 != s1 and self.full_shape[s0]%tc.dims[0] == 0 and self.full_shape[s1]%tc.dims[1] == 0
 
         # tensor core -- unroll the reduce dim, upcast input, then create the correct thread pattern
         if DEBUG >= 3: print("TENSOR CORES", axis_buf0, axis_buf1, tc)
         self.tensor_core_opts = (tc_opts:=TensorCoreOptions(bufs=(buf0, buf1), axes=[s0, s1], axes_exist=[True, True]))
-        self.apply_opt(Opt(OptOps.UNROLL, 0, tc.dims[2]), append_opt=False)
+        self.apply_opt(Opt(OptOps.UNROLL, sr, tc.dims[2]), append_opt=False)
         for i, sz in enumerate([prod(x) for x in [[x[1] for x in tc.threads if x[0]==dim] for dim in range(2)]]): # upcast non-local'd N, M
           if tc.dims[i] > sz: self.apply_opt(Opt(OptOps.UPCAST, tc_opts.axes[i], tc.dims[i]//sz), append_opt=False)
         for (tc_dim, tc_amt) in tc.threads:
           self.apply_opt(Opt(OptOps.LOCAL, tc_opts.axes[tc_dim], tc_amt), append_opt=False)
+        print('tc tc tc')
 
         # assert tensor core
         if use_tensor_cores == 1: self.tensor_core = tc # TC=2 will do the shape ops without the WMMA
