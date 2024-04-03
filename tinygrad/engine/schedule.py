@@ -104,7 +104,10 @@ def _recurse_lb(buf:LazyBuffer, realizes:Set[LazyBuffer], allbufs:Dict[LazyBuffe
           prod(buf.base.st.shape) >= prod([y-x for x,y in buf.st.views[-1].mask]):
         simple_pads.add(buf.base)
       else:
-        realizes.add(buf.base)
+        if buf not in realizes and buf.base.op == UnaryOps.CAST and buf.base.dtype.itemsize >= buf.base.srcs[0].base.dtype.itemsize:
+          realizes.add(buf.base.srcs[0].base)
+        else:
+          realizes.add(buf.base)
     return _recurse_lb(buf.base, realizes, allbufs, simple_pads, children)
   if buf.forced_realize: realizes.add(buf)
   allbufs[buf] = None
@@ -186,6 +189,9 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
           st = st + st_childs[0].st
           if not st.contiguous or tr_next.op in ReduceOps: break
           tr = tr_next
+        # don't cast to higher size before store
+        if tr.op is UnaryOps.CAST and tr.arg[0].itemsize > tr.srcs[0].dtype.itemsize:
+          tr = tr.srcs[0].base
         reduce_for_op[tr] = r
       realizes.add(tr)
     else:
