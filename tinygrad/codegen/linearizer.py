@@ -295,7 +295,7 @@ class Linearizer(Kernel):
             buf_idxs[self.first_reduce-len(tc.threads)+n] = replace_input_idxs[n] # replace locals
           for n in range(tc.num_upcasts()):
             buf_idxs[self.shape_len-self.upcasted+n] = replace_input_idxs[len(tc.threads)+n] # replace upcasts
-        if DEBUG >= 3: print(f"{localbuf_idx} alias {i}: sts={self.sts[i]} idxs={buf_idxs}")
+        if DEBUG >= 4: print(f"{localbuf_idx} alias {i}: sts={self.sts[i]} idxs={buf_idxs}")
         ll = self.global_load(i, buf_idxs)
         locals_to_store.append((localbuf_idx, buf_idxs, ll))
 
@@ -306,7 +306,7 @@ class Linearizer(Kernel):
           local_idxs[self.local_dims-len(tc.threads)+n] = replace_acc_idxs[n] # replace locals
         for n in range(len(replace_acc_idxs)-len(tc.threads)):
           upcast_idxs[n] = replace_acc_idxs[len(tc.threads)+n] # replace upcasts
-        if DEBUG >= 3: print(f"store alias: sts={self.sts[0]} idxs={global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs}")
+        if DEBUG >= 4: print(f"store alias: sts={self.sts[0]} idxs={global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs}")
 
         wmma_sz = [prod(l) for l in tc.thread_local_sizes]
         def upcast_strides(buf:int):

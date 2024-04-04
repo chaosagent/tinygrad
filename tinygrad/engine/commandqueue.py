@@ -104,6 +104,10 @@ class CommandQueue:
           if si.ast[0].op is LoadOps.CUSTOM:
             runner:JITRunner = CustomOp(si.ast[0].arg)
           elif si.ast[0].op is BufferOps.STORE:
+            from tinygrad.dtype import dtypes
+            if DEBUG >= 3 and (si.outputs[0].dtype == dtypes.float or True):
+              from tinygrad.features.graph import print_tree
+              for op in si.ast: print_tree(op)
             runner = Device[si.outputs[0].device].get_runner(*si.ast)
           else: raise RuntimeError(f"unknown type {si}")
           runner.exec(list(si.outputs+si.inputs), si.var_vals)

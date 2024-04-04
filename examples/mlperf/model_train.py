@@ -172,8 +172,7 @@ def train_resnet():
         estimated_total_hours = median_step_time * steps_in_train_epoch * epochs / 60 / 60
         print(f"Estimated training time: {estimated_total_hours:.0f}h{(estimated_total_hours - int(estimated_total_hours)) * 60:.0f}m")
         # if we are doing beam search, run the first eval too
-        if BEAM.value and e == start_epoch: break
-        return
+        break
 
     # ** eval loop **
     if (e + 1 - eval_start_epoch) % eval_epochs == 0:
@@ -204,6 +203,9 @@ def train_resnet():
         et = time.time()
         eval_times.append(et - st)
 
+        if len(eval_loss) == BENCHMARK:
+          break
+
       eval_step.reset()
       total_loss = sum(eval_loss) / len(eval_loss)
       total_top_1 = sum(eval_top_1_acc) / len(eval_top_1_acc)
@@ -229,6 +231,7 @@ def train_resnet():
           fn = f"./ckpts/{time.strftime('%Y%m%d_%H%M%S')}_e{e}.safe"
         print(f"saving ckpt to {fn}")
         safe_save(get_training_state(model, optimizer_group, scheduler_group), fn)
+    if BENCHMARK: break
 
 def train_retinanet():
   # TODO: Retinanet
