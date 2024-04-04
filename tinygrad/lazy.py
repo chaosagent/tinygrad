@@ -171,10 +171,10 @@ class LazyBuffer:
     # 256 split maximum should be "negligible reduce" for low prod(new_shape)
     # 2048 is heuristic number of warps to achieve max occupancy, assuming reduces are done with GROUP
     is_wmma = self.base.op is BinaryOps.MUL or self.base.op is UnaryOps.CAST and self.base.srcs[0].base.op == BinaryOps.MUL
-    wmma_extra = 32 if is_wmma else 1
+    wmma_extra = 128*2 if is_wmma else 1  # no group=32 * wmma wants at least 4 upcasts usually
     _, divisor, dim_to_split = max(((st or 256, divisor, i) for i, (s, st) in enumerate(zip(self.shape, self.st.real_strides(ignore_valid=True))) \
                                    if i in axis and (st is None or isinstance(st, int) and st > 0) and
-                                   (divisor := max((x for x in range(1, min(256, 2048 * wmma_extra // prod(new_shape))+1) if s % x == 0), default=1)) >= 16), default=(0, 1, 0))
+                                   (divisor := max((x for x in range(1, min(256, 2048 * wmma_extra // prod(new_shape))+1) if s % x == 0), default=1)) >= 8), default=(0, 1, 0))
     if divisor == 1: return self._reduce_op(op, axis)
     def splitted_shape(first_stage=1):
       return self.shape[:dim_to_split] + (divisor,) + (self.shape[dim_to_split]//divisor,)*first_stage + self.shape[dim_to_split+1:]
