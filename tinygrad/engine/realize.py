@@ -4,6 +4,7 @@ from tinygrad.ops import ScheduleItem, BufferOps, LoadOps
 from tinygrad.device import JITRunner, Device, BufferCopy, BufferXfer, update_stats
 from tinygrad.buffer import Buffer
 from tinygrad.shape.symbolic import Variable
+from tinygrad.features.graph import save_schedule_graph
 
 class CustomOp(JITRunner):
   def __init__(self, fxn):
@@ -24,6 +25,7 @@ def lower_schedule_item(si:ScheduleItem) -> Optional[JITRunner]:
 
 logops = open(getenv("LOGOPS", ""), "a") if getenv("LOGOPS", "") else None
 def run_schedule(schedule:List[ScheduleItem]):
+  if getenv("GRAPHSCHEDULE"): save_schedule_graph(schedule)
   while len(schedule):
     si = schedule.pop(0)
     if logops and si.ast[0].op not in LoadOps and not any(i.device.startswith("DISK:") for i in si.inputs): logops.write(str(si.ast)+"\n")
