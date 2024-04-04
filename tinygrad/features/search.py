@@ -58,7 +58,7 @@ def _compile_linearizer(compiler:Compiler, lin:Linearizer, name:Optional[str]=No
 def _try_compile_linearized_w_idx(x:Tuple[int,Linearizer], compiler:Compiler):
   try: return x[0], _compile_linearizer(compiler, x[1], "test")
   except Exception:
-    if DEBUG >= 4: traceback.print_exc()
+    if DEBUG >= 2: traceback.print_exc()
     return x[0], None
 
 # workers should ignore ctrl c
