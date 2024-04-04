@@ -351,7 +351,7 @@ class Kernel:
         axis_buf1 = [(i,self.full_shape[i],buf0_strides[i], self.full_shape[i]%tc.dims[1] != 0) for i,s in enumerate(buf1_strides[:self.first_reduce]) if s == 0]  # noqa: E501
         axis_buf0.sort(key=lambda x: x[-1])
         axis_buf1.sort(key=lambda x: x[-1])
-        reduce_szs = [(i, sz) for i, sz in enumerate(reduce_szs) if sz % tc.dims[2] == 0 and sz >= tc.dims[2]]
+        reduce_szs = [(i, sz) for i, sz in enumerate(reduce_szs)]
         #print('axes', axis_buf0, axis_buf1, reduce_szs)
         if not(axis_buf0 and axis_buf1 and reduce_szs): continue
         if not((self.shape_len-self.first_reduce) == 1 or (opt_level >= 1)): continue
@@ -363,7 +363,8 @@ class Kernel:
         s0, s1, sr = axis_choices[-(axis+1)][0][0], axis_choices[-(axis+1)][1][0], axis_choices[-(axis+1)][2][0] # s0 is n, s1 is m, sr is k
         if self.full_shape[s0] % tc.dims[0] != 0: self.apply_opt(Opt(OptOps.PADTO, s0, tc.dims[0]), append_opt=False)
         if self.full_shape[s1] % tc.dims[1] != 0: self.apply_opt(Opt(OptOps.PADTO, s1, tc.dims[1]), append_opt=False)
-        assert s0 != s1 and self.full_shape[s0]%tc.dims[0] == 0 and self.full_shape[s1]%tc.dims[1] == 0
+        if self.full_shape[self.first_reduce + sr] % tc.dims[2] != 0: self.apply_opt(Opt(OptOps.PADTO, self.first_reduce + sr, tc.dims[2]), append_opt=False)
+        assert s0 != s1 and self.full_shape[s0]%tc.dims[0] == 0 and self.full_shape[s1]%tc.dims[1] == 0 and self.full_shape[self.first_reduce+sr] % tc.dims[2] == 0
 
         # tensor core -- unroll the reduce dim, upcast input, then create the correct thread pattern
         if DEBUG >= 3: print("TENSOR CORES", axis_choices[-(axis+1)], tc)
@@ -475,9 +476,13 @@ class Kernel:
       self.dont_use_locals = True
     elif opt.op is OptOps.PADTO:
       check(not self.vars, "does not work with symbolic shape")
-      check(axis < self.first_reduce, "cannot pad a reduce axis")
+      UNSAFE_PAD_OPS = {BinaryOps.DIV, BinaryOps.CMPLT, BinaryOps.CMPEQ, UnaryOps.LOG2, UnaryOps.EXP2}
+      is_reduce = self.first_reduce <= axis < self.shape_len - self.upcasted  # need to precalculate this, since self.first_reduce won't work when only some buffers are padded
+      check(axis < self.first_reduce or all(op not in UNSAFE_PAD_OPS for ast in self.ast for op in ast.lazyops) and True, "cannot pad a reduce axis with unsafe pad ops")
       padded = False
       for i,st in enumerate(self.sts):
+        if is_reduce and self.bufs[i] not in self.earlybufs: continue
+        # todo: hack: we don't want to check this if we are doing TC
         if append_opt: check(self.sts[i].shape[axis] > amt//2, "pad adds more than double the work")
         if (ru := round_up(cast(int, self.sts[i].shape[axis]), cast(int, amt)) - self.sts[i].shape[axis]):
           # pad right seems to be faster
