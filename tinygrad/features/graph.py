@@ -99,9 +99,8 @@ def graph_uops(uops:List[UOp]):
     for v in u.vin: G.add_edge(uops.index(v), uops.index(u))
   save_graph(G, f'{GRAPHPATH}.uops', '-Grankdir=LR')
 
-schedule = []
 def save_schedule_graph(sched: List[ScheduleItem]):
-  global schedule
+  schedule = []
   schedule.extend(sched)
   buf_schedules = {out: si for si in schedule for out in si.outputs}
   nodes, edges = [], []
@@ -114,5 +113,7 @@ def save_schedule_graph(sched: List[ScheduleItem]):
       source_index = schedule.index(buf_schedules[x]) + 1
       edge_id = f"{source_index}-{i+1}"
       edges.append({'source': str(source_index), 'target': str(i+1), 'id': edge_id, 'label': edge_id})
+  if len(schedule) < 32:
+    return
   with open("schedule", "wb") as f: pickle.dump((nodes, edges), f)
   print(f"Saved {len(schedule)} ScheduleItems")
