@@ -177,7 +177,7 @@ def train_resnet():
 
     # ** eval loop **
     if (e + 1 - eval_start_epoch) % eval_epochs == 0 and steps_in_val_epoch > 0:
-      train_step.reset()  # free the train step memory :(
+      #train_step.reset()  # free the train step memory :(
       eval_loss = []
       eval_times = []
       eval_top_1_acc = []
@@ -207,7 +207,7 @@ def train_resnet():
         if len(eval_loss) == BENCHMARK:
           break
 
-      eval_step.reset()
+      #eval_step.reset()
       total_loss = sum(eval_loss) / len(eval_loss)
       total_top_1 = sum(eval_top_1_acc) / len(eval_top_1_acc)
       total_fw_time = sum(eval_times) / len(eval_times)
