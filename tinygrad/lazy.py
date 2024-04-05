@@ -155,6 +155,8 @@ class LazyBuffer:
 
   def r(self, op:ReduceOps, axis:Tuple[int, ...]) -> LazyBuffer:
     new_shape = tuple(1 if i in axis else s for i,s in enumerate(self.shape))
+    if prod(self.shape) // prod(new_shape) > 128 and dtypes.is_float(self.dtype) and self.dtype.itemsize <= 2:
+      print(f"WARNING: reduce of size {prod(self.shape) // prod(new_shape)} with dtype {self.dtype}")
     # TODO: this logic should move to the scheduler
     if self.size == 0 and 0 not in new_shape: return self.const({ReduceOps.SUM: 0.0, ReduceOps.MAX: -math.inf}[op], new_shape)
     # TODO: can we split symbolic shape if the reduce axis is not symbolic?
