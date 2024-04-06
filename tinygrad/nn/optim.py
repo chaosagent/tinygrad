@@ -49,18 +49,18 @@ class LARS(Optimizer):
       # TODO: fix this in lazy.py
       g = t.grad.contiguous()
       if self.tcoef != 0:
-        r1 = t.detach().square().sum().sqrt()
-        r2 = g.square().sum().sqrt()
-        r = (r1 > 0).where((r2 > 0).where(self.tcoef * r1 / (r2 + self.wd * r1), 1.0), 1.0)
-      else: r = 1.0
+        r1 = t.detach().float().square().sum().sqrt()
+        r2 = g.float().square().sum().sqrt()
+        r = ((r1 > 0).where((r2 > 0).where(self.tcoef * r1 / (r2 + self.wd * r1), 1.0), 1.0) * self.lr).cast(self.lr.dtype)
+      else: r = self.lr
       g = g + self.wd * t.detach()
       # classic momentum does post learning rate update
-      if self.classic: g = g * r * self.lr
+      if self.classic: g = g * r
       if self.momentum:
         self.b[i].assign(self.momentum * self.b[i] + g)  # NOTE: self.b[i] is zero on the first run, no if required
         g = (g + self.momentum * self.b[i]) if self.nesterov else self.b[i]
       # popular momentum does pre learning rate update
-      if not self.classic: g = g * r * self.lr
+      if not self.classic: g = g * r
       t.assign(t.detach() - g)
     return self.b
 
