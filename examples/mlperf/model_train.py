@@ -60,7 +60,6 @@ def train_resnet():
   steps_in_train_epoch  = config["steps_in_train_epoch"]  = (len(get_train_files()) // BS)
   steps_in_val_epoch    = config["steps_in_val_epoch"]    = (len(get_val_files()) // EVAL_BS)
 
-  config["DEFAULT_FLOAT"] = dtypes.default_float.name
   config["BEAM"]    = BEAM.value
   config["WINO"]    = WINO.value
   config["SYNCBN"]  = getenv("SYNCBN")
@@ -88,6 +87,12 @@ def train_resnet():
     load_training_state(model, optimizer_group, scheduler_group, safe_load(ckpt))
     start_epoch = int(scheduler.epoch_counter.numpy().item() / steps_in_train_epoch)
     print(f"resuming from {ckpt} at epoch {start_epoch}")
+
+  # we want to do initializations in fp32 and calculations in specified float
+  FLOAT = config["DEFAULT_FLOAT"] = getenv("FLOAT", "float32")
+  dtypes.default_float = getattr(dtypes, FLOAT.lower())
+  assert dtypes.is_float(dtypes.default_float), f"{FLOAT} is not a float dtype"
+
 
   # ** init wandb **
   WANDB = getenv("WANDB")
@@ -207,7 +212,7 @@ def train_resnet():
         if len(eval_loss) == BENCHMARK:
           break
 
-      #eval_step.reset()
+      eval_step.reset()  # jit doesn't capture the weight.cast(dtypes.default_float) operation
       total_loss = sum(eval_loss) / len(eval_loss)
       total_top_1 = sum(eval_top_1_acc) / len(eval_top_1_acc)
       total_fw_time = sum(eval_times) / len(eval_times)
