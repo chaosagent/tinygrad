@@ -51,8 +51,6 @@ def train_resnet():
   lr_warmup_epochs  = config["lr_warmup_epochs"]  = getenv("WARMUP_EPOCHS", 5)
   decay             = config["decay"]             = getenv("DECAY", 2e-4)
 
-  loss_scaler       = config["LOSS_SCALER"]       = getenv("LOSS_SCALER", 128.0 if dtypes.default_float == dtypes.float16 else 1.0)
-
   target, achieved  = getenv("TARGET", 0.759), False
   eval_start_epoch  = getenv("EVAL_START_EPOCH", 0)
   eval_epochs       = getenv("EVAL_EPOCHS", 1)
@@ -92,6 +90,7 @@ def train_resnet():
   FLOAT = config["DEFAULT_FLOAT"] = getenv("FLOAT", "float32")
   dtypes.default_float = getattr(dtypes, FLOAT.lower())
   assert dtypes.is_float(dtypes.default_float), f"{FLOAT} is not a float dtype"
+  loss_scaler       = config["LOSS_SCALER"]       = getenv("LOSS_SCALER", 128.0 if dtypes.default_float == dtypes.float16 else 1.0)
 
 
   # ** init wandb **
