@@ -72,6 +72,10 @@ class LazyOp:
   def lazyops(self) -> List[LazyOp]: return dedup([self] + [item for x in self.src for item in x.lazyops])
   def vars(self) -> List[Variable]:
     return sorted(set.union(*[x.arg.st.vars() for x in self.lazyops if x.op in BufferOps], set()), key=lambda x: str(x.expr))
+  def simplify(self):
+    if self.op is UnaryOps.CAST and self.src[0].op is UnaryOps.CAST: return LazyOp(self.op, self.src[0].src, self.arg).simplify()
+    if self.op is UnaryOps.CAST and self.src[0].dtype == self.arg[0]: return self.src[0]
+    return self
 
 # **************** independent FlopCounter ****************
 
