@@ -172,12 +172,12 @@ class LazyBuffer:
     # if there are few globals, make some reduces into globals by splitting into two kernels
     # cap output buffer to 2**19 items: heuristic number of globals achieve max occupancy with enough locals+upcasts.
     #   ~2**10 should be enough if GROUP is used
-    # 256 split maximum should be "negligible reduce" for low prod(new_shape)
-    dim_to_split, divisor = next(((i, x) for i, s in enumerate(self.shape) for x in range(min(256, 2 ** 19 // prod(new_shape)), 8-1, -1) if i in axis and s % x == 0), (0, 1))
-    if divisor < 8: return self._reduce_op(op, axis)
+    # 256 split maximum should be "negligible reduce" for low prod(new_shape), 8 split minimum.
+    dim_to_split, divisor = next(((i, x) for i in axis for x in range(min(256,2**19//prod(new_shape)),8-1,-1) if self.shape[i] % x == 0), (None, 1))
+    if dim_to_split is None: return self._reduce_op(op, axis)
     splitted_shape = self.shape[:dim_to_split] + (divisor,) + (self.shape[dim_to_split]//divisor,) + self.shape[dim_to_split+1:]
-    reshaped = self.reshape(splitted_shape).permute(tuple([x for x in range(len(self.shape)+1) if x != dim_to_split]+[dim_to_split]))  # move split to end
-    return reshaped._reduce_op(op, axis)._reduce_op(op, (len(new_shape),)).reshape(new_shape)  # reduce original axes, then split
+    splitted = self.reshape(splitted_shape).permute(tuple([x for x in range(len(splitted_shape)) if x != dim_to_split]+[dim_to_split]))  # move split to end
+    return splitted._reduce_op(op, axis)._reduce_op(op, (len(new_shape),)).reshape(new_shape)  # reduce original axes, then split
 
   # *** movement ops ***
 
