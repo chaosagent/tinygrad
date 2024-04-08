@@ -168,25 +168,16 @@ class LazyBuffer:
     # TODO: can we split symbolic shape if the reduce axis is not symbolic?
     if not all_int(self.shape) or (0 in self.shape) or prod(self.shape) // prod(new_shape) < getenv("REDUCEOP_SPLIT_THRESHOLD", 32768):
       return self._reduce_op(op, axis)
-    # divide on largest stride of adequate size
-    # 256 stride is local but not very, used as a default if we can't tell the real stride
+
+    # if there are few globals, make some reduces into globals by splitting into two kernels
+    # cap output buffer to 2**19 items: heuristic number of globals achieve max occupancy with enough locals+upcasts.
+    #   ~2**10 should be enough if GROUP is used
     # 256 split maximum should be "negligible reduce" for low prod(new_shape)
-    # 2048 is heuristic number of warps to achieve max occupancy, assuming reduces are done with GROUP
-    is_wmma = self.base.op is BinaryOps.MUL or self.base.op is UnaryOps.CAST and self.base.srcs[0].base.op == BinaryOps.MUL
-    wmma_extra = 128*2 if is_wmma else 1  # no group=32 * wmma wants at least 4 upcasts usually
-    _, divisor, dim_to_split = max(((st or 256, divisor, i) for i, (s, st) in enumerate(zip(self.shape, self.st.real_strides(ignore_valid=True))) \
-                                   if i in axis and (st is None or isinstance(st, int) and st > 0) and
-                                   (divisor := max((x for x in range(1, min(256, 2048 * wmma_extra // prod(new_shape))+1) if s % x == 0), default=1)) >= 8), default=(0, 1, 0))
-    if divisor == 1: return self._reduce_op(op, axis)
-    def splitted_shape(first_stage=1):
-      return self.shape[:dim_to_split] + (divisor,) + (self.shape[dim_to_split]//divisor,)*first_stage + self.shape[dim_to_split+1:]
-    ret = self.reshape(splitted_shape(first_stage=1)).permute(tuple([x for x in range(len(self.shape)+1) if x != dim_to_split]+[dim_to_split]))
-    s1 = ret.shape
-    ret = ret._reduce_op(op, axis)
-    s2 = ret.shape
-    ret = ret._reduce_op(op, (len(new_shape),))
-    #print('trigger', self.shape, s1, s2, ret.shape, new_shape, divisor, prod(self.shape) // prod(new_shape) // divisor, dim_to_split, prod(new_shape) * divisor)
-    return ret.reshape(new_shape)
+    dim_to_split, divisor = next(((i, x) for i, s in enumerate(self.shape) for x in range(min(256, 2 ** 19 // prod(new_shape)), 8-1, -1) if i in axis and s % x == 0), (0, 1))
+    if divisor < 8: return self._reduce_op(op, axis)
+    splitted_shape = self.shape[:dim_to_split] + (divisor,) + (self.shape[dim_to_split]//divisor,) + self.shape[dim_to_split+1:]
+    reshaped = self.reshape(splitted_shape).permute(tuple([x for x in range(len(self.shape)+1) if x != dim_to_split]+[dim_to_split]))  # move split to end
+    return reshaped._reduce_op(op, axis)._reduce_op(op, (len(new_shape),)).reshape(new_shape)  # reduce original axes, then split
 
   # *** movement ops ***
 
