@@ -1,10 +1,10 @@
 from typing import List, Dict, Optional
-from tinygrad.helpers import getenv, colored
+from tinygrad.helpers import getenv, colored, DEBUG
 from tinygrad.ops import ScheduleItem, BufferOps, LoadOps
 from tinygrad.device import JITRunner, Device, BufferCopy, BufferXfer, update_stats
 from tinygrad.buffer import Buffer
 from tinygrad.shape.symbolic import Variable
-from tinygrad.features.graph import save_schedule_graph
+from tinygrad.features.graph import save_schedule_graph, print_tree
 
 class CustomOp(JITRunner):
   def __init__(self, fxn):
@@ -14,7 +14,10 @@ class CustomOp(JITRunner):
 
 def lower_schedule_item(si:ScheduleItem) -> Optional[JITRunner]:
   assert len(set(x.device for x in si.outputs+si.inputs)) == 1 or si.ast[0].op is LoadOps.COPY
-  if si.ast[0].op is BufferOps.STORE: return Device[si.outputs[0].device].get_runner(*si.ast)
+  if si.ast[0].op is BufferOps.STORE:
+    if DEBUG >= 3:
+      for ast in si.ast: print_tree(ast)
+    return Device[si.outputs[0].device].get_runner(*si.ast)
   assert len(si.ast) == 1 and len(si.outputs) == 1, "only ASTRunner supports multioutput"
   out, ast = si.outputs[0], si.ast[0]
   if ast.op is LoadOps.COPY:

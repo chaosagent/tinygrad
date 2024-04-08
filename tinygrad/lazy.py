@@ -185,7 +185,7 @@ class LazyBuffer:
     ret = ret._reduce_op(op, axis)
     s2 = ret.shape
     ret = ret._reduce_op(op, (len(new_shape),))
-    print('trigger', self.shape, s1, s2, ret.shape, new_shape, divisor, prod(self.shape) // prod(new_shape) // divisor, dim_to_split, prod(new_shape) * divisor)
+    #print('trigger', self.shape, s1, s2, ret.shape, new_shape, divisor, prod(self.shape) // prod(new_shape) // divisor, dim_to_split, prod(new_shape) * divisor)
     return ret.reshape(new_shape)
 
   # *** movement ops ***
