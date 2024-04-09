@@ -97,7 +97,7 @@ def train_resnet():
   WANDB = getenv("WANDB")
   if WANDB:
     import wandb
-    wandb_args = {"id": wandb_id, "resume": "must"} if (wandb_id := getenv("WANDB_RESUME", "")) else {}
+    wandb_args = {"id": ckpt.split('_')[2], "resume": "must"} if ckpt else {}
     wandb.init(config=config, **wandb_args)
 
   BENCHMARK = getenv("BENCHMARK")
