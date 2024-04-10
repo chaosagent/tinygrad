@@ -754,8 +754,8 @@ class Tensor:
       big = (x * w).reshape(bs, groups, rcout, cin, *[k * s for k, s in zip(HW, yx)])
       big = big._pool(HW, stride, dilation, repeat=False)
       oyx = big.shape[-2*len(HW):-len(HW)]
-      ret = big.sum([-(i+1) for i in range(len(HW))] + [3], acc_dtype=acc_dtype).reshape(bs, cout, *oyx)
-      return ret if bias is None else ret.add(bias.reshape(1, -1, *[1] * len(HW)))
+      ret = big.permute(0, 3, 4, 5, 6, 7, 1, 2).sum([-(i+1+2) for i in range(len(HW))] + [1], acc_dtype=acc_dtype).reshape(bs, *oyx, cout)
+      return (ret if bias is None else ret.add(bias.reshape(1, -1, *[1] * len(HW)).permute(0, 2, 3, 1))).permute(0, 3, 1, 2)
 
     x = self.pad2d(padding_)._pool(HW, stride, dilation)   # (bs, groups*cin, oy, ox, H, W)
     rcout, oyx = cout//groups, x.shape[2:-len(HW)]

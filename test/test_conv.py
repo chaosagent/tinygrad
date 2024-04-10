@@ -1,3 +1,4 @@
+import time
 import unittest
 import numpy as np
 from tinygrad.tensor import Tensor
@@ -157,7 +158,12 @@ class TestConv(unittest.TestCase):
         #check_schedule(img.grad, 3, [c1.weight, c1.bias])
         c1.weight.grad.realize()
         img.grad.contiguous().realize()
-    for i in range(5): f()
+      return img.grad
+    for i in range(5):
+      st = time.perf_counter()
+      f().numpy()
+      et = time.perf_counter()
+      print(f'{et - st}s')
 
 if __name__ == '__main__':
   unittest.main()
