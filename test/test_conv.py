@@ -138,5 +138,26 @@ class TestConv(unittest.TestCase):
     x = x.reshape((1, 12, 128, 256))
     x.numpy()
 
+  def test_conv_backwards(self):
+    from tinygrad import TinyJit, nn, dtypes
+    from examples.mlperf.initializers import Conv2dHeNormal
+    from tinygrad.helpers import getenv
+    c1 = Conv2dHeNormal(64,64,3, stride=1, padding=1)
+    dtypes.default_float = dtypes.half
+    c1.weight.requires_grad = True
+    #c1.bias.requires_grad = True
+
+    # run
+    @TinyJit
+    def f():
+      img = Tensor.rand(128,64,56,56, requires_grad=True, dtype=dtypes.half)
+      for i in range(getenv("CNT", 1)):
+        c1(img).relu().mean().backward()
+        #check_schedule(c1.weight.grad, 3, [c1.weight, c1.bias])
+        #check_schedule(img.grad, 3, [c1.weight, c1.bias])
+        c1.weight.grad.realize()
+        img.grad.contiguous().realize()
+    for i in range(5): f()
+
 if __name__ == '__main__':
   unittest.main()

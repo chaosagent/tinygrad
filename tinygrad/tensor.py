@@ -686,18 +686,19 @@ class Tensor:
 
   # ***** processing ops *****
 
-  def _pool(self, k_:Tuple[sint, ...], stride:Union[Tuple[int, ...], int]=1, dilation:Union[Tuple[int, ...], int]=1) -> Tensor:
-    assert len(self.shape) >= len(k_), f"can't pool {self.shape} with {k_}"
+  def _pool(self, k_:Tuple[sint, ...], stride:Union[Tuple[int, ...], int]=1, dilation:Union[Tuple[int, ...], int]=1, repeat=True) -> Tensor:
+    #assert len(self.shape) >= len(k_), f"can't pool {self.shape} with {k_}"
     assert all_int(self.shape) and all_int(k_), f"does not support symbolic {self.shape=}, {k_=}"
     s_, d_ = make_pair(stride, len(k_)), make_pair(dilation, len(k_))
     assert len(k_) == len(s_) == len(d_), f"stride/dilation mismatch kernel:{k_} stride:{s_} dilation:{d_}"
-    noop_, i_ = [None] * len(self.shape[:-len(k_)]), self.shape[-len(k_):]
-    if any(k > s for k,s in zip(k_, s_)) or any(d != 1 for d in d_):
+    noop_, i_ = [None] * len(self.shape[:-len(k_)]), [s if repeat else s // k for s, k in zip(self.shape[-len(k_):], k_)]
+    if not repeat or any(k > s for k,s in zip(k_, s_)) or any(d != 1 for d in d_):
       o_ = [(i - d * (k-1) - 1)//s + 1 for i,d,k,s in zip(i_, d_, k_, s_)]
       # repeats such that we don't need padding
-      xup = self.repeat([1]*len(noop_) + [math.ceil(k*(i+d) / i) for k,i,d in zip(k_, i_, d_)])
+      xup = self
+      if repeat: xup = xup.repeat([1] * len(noop_) + [k for k,i,d in zip(k_, i_, d_)])
       # slice by dilation
-      xup = xup.shrink(tuple(noop_ + [(0,k*(i+d)) for k,i,d in zip(k_, i_, d_)])).reshape(noop_ + flatten((k,i+d) for k,i,d in zip(k_, i_, d_)))
+      xup = xup.pad(tuple(noop_ + [(0, k*d) for k, i, d in zip(k_, i_, d_)])).reshape(noop_ + flatten((k,i+d) for k,i,d in zip(k_, i_, d_)))
       # handle stride
       xup = xup.shrink(noop_ + flatten(((0,k), (0,o*s)) for k,o,s in zip(k_, o_, s_))).reshape(noop_ + flatten((k,o,s) for k,o,s in zip(k_, o_, s_)))
       xup = xup.shrink(noop_ + flatten(((0,k), (0,o), (0,1)) for k,o in zip(k_, o_))).reshape(noop_ + flatten((k,o) for k,o in zip(k_, o_)))
@@ -735,16 +736,29 @@ class Tensor:
     if isinstance(padding, (tuple,list)): assert len(padding) == 2*len(HW) or len(padding) == len(HW), f"Expected padding of length {2*len(HW)} or {len(HW)}, but got {len(padding)} for tensor of shape {self.shape}"  # noqa: E501
     padding_ = [padding]*2*len(HW) if isinstance(padding, int) else (padding if len(padding) == 2*len(HW) else [p for p in padding for _ in range(2)][::-1])  # noqa: E501
 
-    # conv2d is a pooling op (with padding)
+    if not all(k == 3 for k in HW) or stride != 1 or dilation != 1 or not WINO:
+      # normal conv
+
+      # conv2d is a pooling op (with padding)
+      x = self.pad2d(padding_)  # (bs, groups*cin, y, x)
+      rcout, yx = cout // groups, x.shape[-len(HW):]
+
+      x = (x.reshape(bs, groups, cin, 1, *flatten(zip([1]*len(HW), yx)))
+           .expand(bs, groups, cin, rcout, *flatten(zip(HW, yx)))
+           .permute(0, 1, 3, 2, *range(4, 4+2*len(HW))))
+      w = (weight.reshape(1, groups, rcout, *[1] * len(yx), cin, *HW)
+           .expand(bs, groups, rcout, *[1]*len(yx), cin, *HW)
+           .expand(bs, groups, rcout, *yx, cin, *HW)
+           .permute(0, 1, 2, 3 + len(yx), *flatten([(3 + len(yx) + 1 + i, 3 + i) for i in range(len(HW))]))
+           )
+      big = (x * w).reshape(bs, groups, rcout, cin, *[k * s for k, s in zip(HW, yx)])
+      big = big._pool(HW, stride, dilation, repeat=False)
+      oyx = big.shape[-2*len(HW):-len(HW)]
+      ret = big.sum([-(i+1) for i in range(len(HW))] + [3], acc_dtype=acc_dtype).reshape(bs, cout, *oyx)
+      return ret if bias is None else ret.add(bias.reshape(1, -1, *[1] * len(HW)))
+
     x = self.pad2d(padding_)._pool(HW, stride, dilation)   # (bs, groups*cin, oy, ox, H, W)
     rcout, oyx = cout//groups, x.shape[2:-len(HW)]
-    if not all(x == 3 for x in HW) or stride != 1 or dilation != 1 or not WINO:
-      # normal conv
-      x = x.reshape(bs, groups, cin, 1, *oyx, *HW).expand(bs, groups, cin, rcout, *oyx, *HW).permute(0,1,3,*[4+i for i in range(len(oyx))],2,*[4+len(oyx)+i for i in range(len(HW))])  # noqa: E501
-
-      # conv! broadcasted to (bs, groups, rcout, *oyx, cin, *HW)
-      ret = (x * weight.reshape(1, groups, rcout, *[1] * len(oyx), cin, *HW)).sum([-1-i for i in range(1+len(oyx))], keepdim=True, acc_dtype=acc_dtype).reshape(bs, cout, *oyx)  # noqa: E501
-      return ret if bias is None else ret.add(bias.reshape(1, -1, *[1] * len(HW)))
 
     HWI, HWO = (6,) * len(HW), (4,) * len(HW)  # F(4x4,3x3) winograd tiles
     winograd_G = [[1/4, 0, 0], [-1/6, -1/6, -1/6], [-1/6, 1/6, -1/6], [1/24, 1/12, 1/6], [1/24, -1/12, 1/6], [0, 0, 1]]
