@@ -138,5 +138,47 @@ class TestConv(unittest.TestCase):
     x = x.reshape((1, 12, 128, 256))
     x.numpy()
 
+  def test_conv_backwards(self):
+    from tinygrad import TinyJit, nn, dtypes
+    from examples.mlperf.initializers import Conv2dHeNormal
+    from tinygrad.helpers import getenv
+
+    cin, cout, k, s, p = 64, 64, 3, 1, 1
+    bs, y, x = 128, 56, 56
+
+    cin, cout, k, s, p = 256, 256, 3, 2, 1
+    bs, y, x = 256, 28, 28
+
+    c1 = Conv2dHeNormal(cin, cout, k, stride=s, padding=p)
+    dtypes.default_float = dtypes.half
+    c1.weight.requires_grad = True
+    #c1.bias.requires_grad = True
+    # run
+    @TinyJit
+    def f():
+      img = Tensor.rand(bs, cin, y, x, requires_grad=True, dtype=dtypes.half)
+      for i in range(getenv("CNT", 1)):
+        c1(img).relu().mean().backward()
+        #check_schedule(c1.weight.grad, 3, [c1.weight, c1.bias])
+        #check_schedule(img.grad, 3, [c1.weight, c1.bias])
+        c1.weight.grad.realize()
+        img.grad.contiguous().realize()
+      return img.grad
+    for i in range(5):
+      st = time.perf_counter()
+      f().numpy()
+      et = time.perf_counter()
+      print(f'{et - st}s')
+
+  def test_funny_st(self):
+    from tinygrad.shape.shapetracker import ShapeTracker, View
+    st = ShapeTracker(views=(View(shape=(256, 1, 256, 256, 3, 14, 2, 3, 14, 2), strides=(50176, 0, 1, 0, 0, 3584, 0, 0, 256, 0), offset=0, mask=((0, 256), (0, 1), (0, 256), (0, 256), (0, 3), (0, 14), (0, 1), (0, 3), (0, 14), (0, 1)), contiguous=False), View(shape=(256, 1, 256, 256, 3, 31, 3, 31), strides=(462422016, 0, 1806336, 7056, 2352, 84, 28, 1), offset=0, mask=((0, 256), (0, 1), (0, 256), (0, 256), (0, 3), (0, 28), (0, 3), (0, 28)), contiguous=False), View(shape=(256, 1, 256, 256, 3, 30, 3, 30), strides=(566820864, 0, 8649, 2214144, 2790, 93, 30, 1), offset=0, mask=None, contiguous=False)))
+    print(st)
+    st_ = ShapeTracker(st.views[1:])
+    print(*st.expr_idxs())
+    print('asdf')
+    print(*st_.expr_idxs())
+
+
 if __name__ == '__main__':
   unittest.main()
