@@ -349,6 +349,7 @@ class Kernel:
         buf0_strides, buf1_strides, reduce_sz = self.sts[buf0].real_strides(), self.sts[buf1].real_strides(), self.full_shape[self.first_reduce]
         axis_buf0 = [(i,self.full_shape[i],buf1_strides[i]) for i,s in enumerate(buf0_strides[:self.first_reduce]) if s == 0 and self.full_shape[i]%tc.dims[0] == 0]  # noqa: E501
         axis_buf1 = [(i,self.full_shape[i],buf0_strides[i]) for i,s in enumerate(buf1_strides[:self.first_reduce]) if s == 0 and self.full_shape[i]%tc.dims[1] == 0]  # noqa: E501
+        print(axis_buf0, axis_buf1, reduce_sz, self.first_reduce)
         if not(axis_buf0 and axis_buf1 and reduce_sz%tc.dims[2] == 0 and reduce_sz >= tc.dims[2]): continue
         if not((self.shape_len-self.first_reduce) == 1 or (opt_level >= 1)): continue
 
@@ -568,6 +569,7 @@ class Kernel:
     while prod(self.sts[0].shape[:self.first_reduce]) >= 1024:
       xb_choices = []
       for axis, upcast_amount in itertools.product(range(self.first_reduce), [3,4]):   # consider all the non reduce axes, and a 3 or 4 reduce
+        if prod(self.full_shape[self.shape_len-self.upcasted:]) * upcast_amount > 256: continue
         # if we haven't upcasted it, it's not symbolic, it mods, and buffer has stride 0 on axis while having no stride 0 in the upcasted axis already
         if axis not in upcasted_axis and isinstance(self.full_shape[axis], int) and self.full_shape[axis]%upcast_amount == 0 and any(st.views[-1].strides[axis] == 0 and not any(x[1] == 0 for x in self.upcasted_axis(buf_index)) for buf_index, st in enumerate(self.sts)):  # noqa: E501
           xb_choices.append((sum(st.views[-1].strides[axis]>0 for st in self.sts), sum(st.views[-1].strides[axis] for st in self.sts), axis, upcast_amount))  # noqa: E501
@@ -579,15 +581,15 @@ class Kernel:
       else: break
 
     # if last dim is small(ish) and it's a reduce dim, upcast the reduce (loop unrolling). no simplify needed since it's just an upcast.
-    if self.first_reduce < (self.shape_len-self.upcasted) and (len(list(self.shape_offsets(self.full_buf_index))) <= 4 or not any(r for _,_,r in self.upcasted_axis(self.full_buf_index))) and (self.upcasted == 0 or prod(self.full_shape[-self.upcasted:]) < 64):  # noqa: E501
-      if (s:=self.full_unupcasted_shape[-1]) <= 32 and isinstance(s, int):  # NOTE: cannot loop unroll symbolic axis
+    if self.first_reduce < (self.shape_len-self.upcasted) and (len(list(self.shape_offsets(self.full_buf_index))) <= 4 or not any(r for _,_,r in self.upcasted_axis(self.full_buf_index))):  # noqa: E501
+      if (s:=self.full_unupcasted_shape[-1]) <= 32 and isinstance(s, int) and prod(self.full_shape[self.shape_len-self.upcasted:]) * s <= 256:  # NOTE: cannot loop unroll symbolic axis
         self.apply_opt(Opt(OptOps.UNROLL, len(self.full_unupcasted_shape)-1-self.first_reduce, 0))
         # if it's small, upcast a second reduce dimension too
         if self.first_reduce < (self.shape_len-self.upcasted) and s <= 3 and (s2:=self.full_unupcasted_shape[-1]) <= 3 and isinstance(s2, int):
           self.apply_opt(Opt(OptOps.UNROLL, len(self.full_unupcasted_shape)-1-self.first_reduce, 0))
       else:
         for splits in [4]:
-          if self.full_unupcasted_shape[-1]%splits == 0:
+          if self.full_unupcasted_shape[-1]%splits == 0 and prod(self.full_shape[self.shape_len-self.upcasted:]) * splits <= 256:
             self.apply_opt(Opt(OptOps.UNROLL, len(self.full_unupcasted_shape)-1-self.first_reduce, splits))
             break
 
@@ -616,3 +618,5 @@ class Kernel:
           will_delete_shape = local_sz == self.full_shape[axis]
           self.apply_opt(Opt(OptOps.LOCAL, axis, local_sz))
           if will_delete_shape: deleted_shape += 1
+
+    if DEBUG >= 3: print(self.applied_opts)
