@@ -17,6 +17,9 @@ def he_normal(*shape, a: float = 0.00, **kwargs) -> Tensor:
   return std * rand_truncn(*shape, **kwargs)
 
 class Conv2dHeNormal(nn.Conv2d):
+  def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+    super().__init__(in_channels, out_channels, kernel_size, stride=stride, padding=padding, dilation=dilation, groups=groups, bias=bias)
+    self.in_channels, self.out_channels = in_channels, out_channels
   def initialize_weight(self, out_channels, in_channels, groups):
     return he_normal(out_channels, *self.kernel_size, in_channels//groups, a=0.0)
   def __call__(self, x: Tensor):
