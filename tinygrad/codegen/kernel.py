@@ -346,7 +346,7 @@ class Kernel:
           return None
         if (buf0:=buf_index(mul_op.src[0])) is None or (buf1:=buf_index(mul_op.src[1])) is None: continue
 
-        buf0_strides, buf1_strides, reduce_szs = self.sts[buf0].real_strides(), self.sts[buf1].real_strides(), self.full_shape[self.first_reduce:self.shape_len-self.upcasted]
+        buf0_strides, buf1_strides, reduce_szs = self.sts[buf0].real_strides(debug=True), self.sts[buf1].real_strides(debug=True), self.full_shape[self.first_reduce:self.shape_len-self.upcasted]
         axis_buf0 = [(i,self.full_shape[i],buf1_strides[i], self.full_shape[i]%tc.dims[0] != 0) for i,s in enumerate(buf0_strides[:self.first_reduce]) if s == 0]  # noqa: E501
         axis_buf1 = [(i,self.full_shape[i],buf0_strides[i], self.full_shape[i]%tc.dims[1] != 0) for i,s in enumerate(buf1_strides[:self.first_reduce]) if s == 0]  # noqa: E501
         axis_buf0.sort(key=lambda x: x[-1])
@@ -483,7 +483,7 @@ class Kernel:
       for i,st in enumerate(self.sts):
         if is_reduce and self.bufs[i] not in self.earlybufs: continue
         # todo: hack: we don't want to check this if we are doing TC
-        if append_opt: check(self.sts[i].shape[axis] > amt//2, "pad adds more than double the work")
+        check(self.sts[i].shape[axis] > amt//2, "pad adds more than double the work")
         if (ru := round_up(cast(int, self.sts[i].shape[axis]), cast(int, amt)) - self.sts[i].shape[axis]):
           # pad right seems to be faster
           self.sts[i] = st.pad(((0,0),) * axis + ((0,ru),) + ((0,0),) * (len(st.shape)-axis-1))
