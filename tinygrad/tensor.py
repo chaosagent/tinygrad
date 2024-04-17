@@ -694,13 +694,12 @@ class Tensor:
     noop_, i_ = [None] * len(self.shape[:-len(k_)]), [s if repeat else s // k for s, k in zip(self.shape[-len(k_):], k_)]
     if not repeat or any(k > s for k,s in zip(k_, s_)) or any(d != 1 for d in d_):
       o_ = [(i - d * (k-1) - 1)//s + 1 for i,d,k,s in zip(i_, d_, k_, s_)]
-      # repeats such that we don't need padding
       xup = self
       if repeat: xup = xup.repeat([1] * len(noop_) + [k for k,i,d in zip(k_, i_, d_)])
       # slice by dilation
       xup = xup.pad(tuple(noop_ + [(0, k*d) for k, i, d in zip(k_, i_, d_)])).reshape(noop_ + flatten((k,i+d) for k,i,d in zip(k_, i_, d_)))
       # handle stride
-      xup = xup.shrink(noop_ + flatten(((0,k), (0,o*s)) for k,o,s in zip(k_, o_, s_))).reshape(noop_ + flatten((k,o,s) for k,o,s in zip(k_, o_, s_)))
+      xup = xup.pad(noop_ + flatten((None, (0, (s - (i+d))%s)) for s, i, d in zip(s_, i_, d_))).reshape(noop_ + flatten((k,(i+d+s-1)//s ,s) for i,d,k,s in zip(i_,d_,k_,s_)))
       xup = xup.shrink(noop_ + flatten(((0,k), (0,o), (0,1)) for k,o in zip(k_, o_))).reshape(noop_ + flatten((k,o) for k,o in zip(k_, o_)))
       # permute to move reduce to the end
       return xup.permute(*range(len(noop_)), *[len(noop_)+i*2+1 for i in range(len(i_))], *[len(noop_)+i*2 for i in range(len(i_))])
