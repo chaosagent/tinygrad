@@ -101,12 +101,26 @@ def _recurse_lb(buf:LazyBuffer, realizes:Set[LazyBuffer], allbufs:Dict[LazyBuffe
       buf.buffer.dtype = dtypes.float32
       buf.buffer.options = None
   if buf.base != buf:
-    # realize all places where the buffer is expanded
-    if prod(buf.base.st.shape) < prod(buf.st.shape):
-      if len(buf.st.views) == 1 and buf.st.views[-1].mask and all_int(buf.base.st.shape) and \
-          prod(buf.base.st.shape) >= prod([y-x for x,y in buf.st.views[-1].mask]):
-        simple_pads.add(buf.base)
-      else:
+    if (base_sz := prod(buf.base.st.shape)) < prod(buf.st.shape):
+      realize_expand = False
+      if all_int(buf.base.st.shape):
+        for view in buf.st.views:
+          # theoretically we can realize before shrink and expands that happen in the same st
+          if not all_int(view.shape):
+            realize_expand = True
+            break
+          if prod(view.shape) > base_sz:
+            #print(prod(buf.base.st.shape), base_sz, buf.base.st.shape, view.shape)
+            if not (view.mask and prod([y - x for x, y in view.mask]) <= base_sz):
+              #print(f'bad {buf.base.st.shape} {view.mask}')
+              realize_expand = True
+              break
+            base_sz = prod(view.shape)
+        else:
+          #print('good')
+          #print(buf.base.op)
+          simple_pads.add(buf.base)
+      if realize_expand:
         if buf not in realizes and buf.base.op == UnaryOps.CAST and buf.base.dtype.itemsize >= buf.base.srcs[0].base.dtype.itemsize:
           realizes.add(buf.base.srcs[0].base)
         else:

@@ -1,4 +1,5 @@
 import unittest
+import time
 import numpy as np
 from tinygrad.tensor import Tensor
 from tinygrad.helpers import Context
@@ -146,8 +147,8 @@ class TestConv(unittest.TestCase):
     cin, cout, k, s, p = 64, 64, 3, 1, 1
     bs, y, x = 128, 56, 56
 
-    cin, cout, k, s, p = 256, 256, 3, 2, 1
-    bs, y, x = 256, 28, 28
+    #cin, cout, k, s, p = 256, 256, 3, 2, 1
+    #bs, y, x = 256, 28, 28
 
     c1 = Conv2dHeNormal(cin, cout, k, stride=s, padding=p)
     dtypes.default_float = dtypes.half
