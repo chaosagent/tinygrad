@@ -699,9 +699,9 @@ class Tensor:
       xup = xup.reshape(noop_ + flatten([(k, i) for k, i in zip(k_, i_)])).pad(noop_ + flatten([(None, (3, 0)) for _ in i_])).reshape(noop_ + [k * (i + 3) for k, i in zip(k_, i_)])
       # slice by dilation
       xup = xup.pad(tuple(noop_ + [(0, k*d) for k, i, d in zip(k_, i_, d_)])).reshape(noop_ + flatten((k,i+3+d) for k,i,d in zip(k_, i_, d_)))
-      xup = xup.shrink(noop_ + flatten((None, (3, i+d)) for i, d in zip(i_, d_)))
+      xup = xup.shrink(noop_ + flatten((None, (3, i+d+3)) for i, d in zip(i_, d_)))
       # handle stride
-      xup = xup.shrink(noop_ + flatten(((0,k), (0,o*s)) for k,o,s in zip(k_, o_, s_))).reshape(noop_ + flatten((k,o,s) for k,o,s in zip(k_, o_, s_)))
+      xup = xup.pad(noop_ + flatten((None, (0, (s - (i + d)) % s)) for s, i, d in zip(s_, i_, d_))).reshape(noop_ + flatten((k, (i + d + s - 1) // s, s) for i, d, k, s in zip(i_, d_, k_, s_)))
       xup = xup.shrink(noop_ + flatten(((0,k), (0,o), (0,1)) for k,o in zip(k_, o_))).reshape(noop_ + flatten((k,o) for k,o in zip(k_, o_)))
       # permute to move reduce to the end
       return xup.permute(*range(len(noop_)), *[len(noop_)+i*2+1 for i in range(len(i_))], *[len(noop_)+i*2 for i in range(len(i_))])
