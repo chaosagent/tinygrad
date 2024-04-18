@@ -482,8 +482,7 @@ class Kernel:
       padded = False
       for i,st in enumerate(self.sts):
         if is_reduce and self.bufs[i] not in self.earlybufs: continue
-        # todo: hack: we don't want to check this if we are doing TC
-        if append_opt: check(self.sts[i].shape[axis] > amt//2, "pad adds more than double the work")
+        check(self.sts[i].shape[axis] > amt//2, "pad adds more than double the work")
         if (ru := round_up(cast(int, self.sts[i].shape[axis]), cast(int, amt)) - self.sts[i].shape[axis]):
           # pad right seems to be faster
           self.sts[i] = st.pad(((0,0),) * axis + ((0,ru),) + ((0,0),) * (len(st.shape)-axis-1))
