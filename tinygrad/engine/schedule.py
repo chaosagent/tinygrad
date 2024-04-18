@@ -9,6 +9,7 @@ from tinygrad.shape.symbolic import Variable
 from tinygrad.dtype import ImageDType, dtypes
 from tinygrad.lazy import LazyBuffer
 from tinygrad.shape.shapetracker import ShapeTracker
+from tinygrad.shape.view import View
 
 # creation can recurse a lot
 sys.setrecursionlimit(10000)
@@ -66,6 +67,61 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
   if buf.op in ReduceOps:
     assert st.contiguous, "ReduceOps late fusion must be contiguous"
     st = ShapeTracker.from_shape(buf.srcs[0].shape)
+
+  if buf.op is BinaryOps.MUL:
+    src_ops = tuple(_recursive_lazyop(x, membufs, var_vals, ShapeTracker.from_shape(st.shape), realizes, cache, False, assign_to, assign_idx) for x in buf.srcs)
+    if not any(lop.op in ReduceOps for src_op in src_ops for lop in src_op.lazyops):
+      from tinygrad.features.graph import print_tree
+      src_sts = [[lop.arg.st for lop in src_op.lazyops if lop.op in [BufferOps.LOAD, BufferOps.CONST]] for src_op in src_ops]
+      mangled_sts = [ShapeTracker.from_shape(st.shape) for _ in buf.srcs]
+      if DEBUG >= 3: print(st)
+      for view in st.views:
+        if DEBUG >= 3: print('view', view)
+        stride_part = View.create(view.shape, strides=view.strides, offset=view.offset, mask=None)
+        view_mask = view.mask or tuple((0, s) for s in view.shape)
+        unmasked_stride_part = View.create(tuple(b - a for a, b in view_mask), strides=view.strides, offset=view.offset + sum([a * strd for (a, b), strd in zip(view_mask, view.strides)]), mask=None)
+        src_zeros = []
+        for src_op_sts in src_sts:
+          zeros = None
+          for src_st in src_op_sts:
+            src_st = src_st + ShapeTracker((unmasked_stride_part,))
+            if DEBUG >= 3: print('src_st', src_st)
+            src_real_strides = src_st.real_strides()
+            if DEBUG >= 3: print('src_real_strides', src_st.real_strides())
+            this_zeros = set([i for i, x in enumerate(src_real_strides) if x == 0])
+            if zeros is None:
+              zeros = this_zeros
+            else:
+              zeros = zeros.intersection(this_zeros)
+          src_zeros.append(zeros)
+        mask_assignment = [[] for _ in buf.srcs]
+        for i in range(len(view.shape)):
+          if i in src_zeros[0]: mask_assignment[1].append(i)
+          elif i in src_zeros[1]: mask_assignment[0].append(i)
+          else:
+            mask_assignment[0].append(i)
+            mask_assignment[1].append(i)
+        if DEBUG >= 3: print('mask_assignment[0]', mask_assignment[0])
+        if DEBUG >= 3: print('mask_assignment[1]', mask_assignment[1])
+        if view.mask is not None:
+          if DEBUG >= 3: print('stride part', stride_part)
+          mask_part0 = tuple((m if i in mask_assignment[0] else (0, s)) for i, (m, s) in enumerate(zip(view.mask, view.shape)))
+          mask_part1 = tuple((m if i in mask_assignment[1] else (0, s)) for i, (m, s) in enumerate(zip(view.mask, view.shape)))
+          if DEBUG >= 3: print('mask_part0', mask_part0)
+          if DEBUG >= 3: print('mask_part1', mask_part1)
+        else:
+          mask_part0 = tuple([(0, s) for s in view.shape])
+          mask_part1 = tuple([(0, s) for s in view.shape])
+        for src_i, src_op_sts in enumerate(src_sts):
+          if DEBUG >= 3: print(f'mangled_sts[{src_i}]', mangled_sts[src_i])
+          st_update = ShapeTracker((View.create(view.shape, strides=tuple((strd if i in mask_assignment[src_i] else 0) for i, strd in enumerate(view.strides)), offset=view.offset, mask=mask_part0 if src_i == 0 else mask_part1),))
+          mangled_sts[src_i] = mangled_sts[src_i] + st_update
+          for st_i, src_st in enumerate(src_op_sts):
+            src_op_sts[st_i] = src_st + st_update
+      final_src_ops = tuple(_recursive_lazyop(x, membufs, var_vals, mangled_sts[src_i], realizes, cache, False, assign_to, assign_idx) for src_i, x in enumerate(buf.srcs))
+      cache[(buf, st)] = ret = LazyOp(buf.op, final_src_ops, buf.arg).simplify()
+      if DEBUG >= 3: print_tree(ret)
+      return ret
 
   # otherwise we fuse it like normal
   cache[(buf, st)] = ret = \
