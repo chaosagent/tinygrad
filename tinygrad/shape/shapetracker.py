@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple, List, Optional, Dict, Set, Iterable, cast
-from tinygrad.helpers import merge_dicts, getenv
+from tinygrad.helpers import merge_dicts, getenv, DEBUG
 from tinygrad.shape.symbolic import Variable, MulNode, Node, SumNode, NumNode, create_lt_node, create_ge_node, sint
 from tinygrad.shape.view import View
 
@@ -64,7 +64,7 @@ class ShapeTracker:
     if len(self.views) == 1 and self.views[-1].mask is None: return self.views[-1].strides
     idxs: List[Node] = [Variable(f"idx{i}", 0, s-1) for i,s in enumerate(self.shape)]
     idx, valid = self.expr_idxs(idxs)
-    if debug: print(idx, valid)
+    if debug and DEBUG >= 3: print(idx, valid)
     ret: List[Optional[sint]] = [None] * len(self.views[-1].shape)
     bad_idx_vars: Set[Variable] = set()
     for this_dim in (idx.nodes if isinstance(idx, SumNode) else [idx]):
