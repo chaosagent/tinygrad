@@ -113,9 +113,10 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
           mask_part0 = tuple([(0, s) for s in view.shape])
           mask_part1 = tuple([(0, s) for s in view.shape])
         for src_i, src_op_sts in enumerate(src_sts):
-          if DEBUG >= 3: print(f'mangled_sts[{src_i}]', mangled_sts[src_i])
           st_update = ShapeTracker((View.create(view.shape, strides=tuple((strd if i in mask_assignment[src_i] else 0) for i, strd in enumerate(view.strides)), offset=view.offset, mask=mask_part0 if src_i == 0 else mask_part1),))
+          if DEBUG >= 3: print(f'st_update[{src_i}]', st_update)
           mangled_sts[src_i] = mangled_sts[src_i] + st_update
+          if DEBUG >= 3: print(f'mangled_sts[{src_i}]', mangled_sts[src_i])
           for st_i, src_st in enumerate(src_op_sts):
             src_op_sts[st_i] = src_st + st_update
       final_src_ops = tuple(_recursive_lazyop(x, membufs, var_vals, mangled_sts[src_i], realizes, cache, False, assign_to, assign_idx) for src_i, x in enumerate(buf.srcs))
