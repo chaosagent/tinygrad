@@ -23,7 +23,7 @@ class Conv2dHeNormal(nn.Conv2d):
     self.weight = he_normal(out_channels, in_channels//groups, *self.kernel_size, a=0.0, dtype=dtypes.float32).permute(0, 2, 3, 1).contiguous()
     if bias: self.bias = self.bias.cast(dtypes.float32)
   def __call__(self, x: Tensor):
-    return x.conv2d(self.weight.permute(0, 3, 1, 2).cast(dtypes.default_float),
+    return x.conv2d(self.weight.cast(dtypes.default_float).permute(0, 3, 1, 2),
                     self.bias.cast(dtypes.default_float) if self.bias is not None else None,
                     padding=self.padding, stride=self.stride, dilation=self.dilation, groups=self.groups)
 
