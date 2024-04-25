@@ -1,4 +1,4 @@
-from typing import Dict, List, cast, DefaultDict, Optional, Tuple, Callable
+from typing import Dict, List, cast, DefaultDict, Optional, Tuple, Callable, Generator
 import itertools, functools, random, math, time, multiprocessing, traceback, signal
 from collections import defaultdict
 from tinygrad.device import Device, Compiled, Buffer, CompiledRunner, Compiler
@@ -100,8 +100,7 @@ def get_linearizer_actions(lin:Linearizer, include_0=True) -> Dict[int, Lineariz
   return acted_lins
 
 beam_pool = None
-def beam_search(lin:Linearizer, rawbufs:List[Buffer], amt:int, allow_test_size=True) -> Linearizer:
-  global beam_pool
+def _beam_search(lin:Linearizer, rawbufs:List[Buffer], amt:int, allow_test_size=True) -> Generator[Linearizer, List[Tuple[Linearizer, float]], Linearizer]:
   key = {"ast": lin.ast[0].key, "amt": amt, "allow_test_size": allow_test_size, "device": lin.opts.device, "suffix": lin.opts.suffix}
   if (val:=diskcache_get("beam_search", key)) is not None and not getenv("IGNORE_BEAM_CACHE") and CACHELEVEL >= 1:
     ret = lin.copy()
@@ -109,46 +108,72 @@ def beam_search(lin:Linearizer, rawbufs:List[Buffer], amt:int, allow_test_size=T
     return ret
 
   beam: List[Tuple[Linearizer, float]] = []
-  seen_libs = set()
+  min_progress_micros = getenv("BEAM_MIN_PROGRESS", 0.01)
 
-  default_parallel, min_progress_micros = 1 if lin.opts.device in {"CUDA", "HSA", "AMD", "NV"} else 0, getenv("BEAM_MIN_PROGRESS",0.01)
+  rawbufs = _ensure_buffer_alloc(rawbufs)
+  var_vals = {k:(k.max+k.min)//2 for k in lin.ast[0].vars()}
+  exiting, st = False, time.perf_counter()
+  dev = Device[lin.opts.device]
+  while not exiting:
+    acted_lins: List[Linearizer] = flatten([get_linearizer_actions(lin, include_0=False).values() for lin,_ in beam]) if len(beam) else [lin]
+    early_stop = beam[0][1] * 3 if len(beam) else 1.0
+    timed_lins = yield acted_lins, rawbufs, var_vals, dev, early_stop
+
+    # done
+    opts = sorted(timed_lins, key=lambda x: x[1])
+    exiting = len(opts) == 0 or (len(beam) > 0 and ((beam[0][1]-opts[0][1])*1e6 < min_progress_micros))
+    if not exiting: beam = opts[:amt]
+    elif len(opts) > 0 and opts[0][1] < beam[0][1]: beam = opts[:1]
+    assert len(beam) > 0, "no BEAM items succeeded?!?" # this asserts in unet3d multi-gpu, need to figure out why
+    if DEBUG >= 2: print(f"\r{time.perf_counter() - st:7.2f}s:", colored(f"{beam[0][1]*1e6:12.2f} us", "green" if exiting else None), f"from {len(acted_lins):3d} -> {len(opts):3d} actions\033[K", beam[0][0].colored_shape())  # noqa: E501
+
+  if CACHELEVEL >= 1: diskcache_put("beam_search", key, beam[0][0].applied_opts)
+  return beam[0][0]
+
+class GeneratorWrapper:
+  def __init__(self, gen): self.gen = gen
+
+  def send(self, x): self.gen.send(x)
+  def __iter__(self): self.value = yield from self.gen
+def beam_search(lin:Linearizer, rawbufs:List[Buffer], amt:int, allow_test_size=True) -> Linearizer:
+  global beam_pool
+
+  default_parallel = 1 if lin.opts.device in {"CUDA", "HSA", "AMD", "NV"} else 0
   if beam_pool is None and getenv("PARALLEL", default_parallel):
     beam_pool = multiprocessing.get_context("spawn").Pool(multiprocessing.cpu_count(), _init_worker, (), getenv("BEAM_MAX_TASKS_PER_CHILD", 16))
 
   try:
-    rawbufs = _ensure_buffer_alloc(rawbufs)
-    var_vals = {k:(k.max+k.min)//2 for k in lin.ast[0].vars()}
-    exiting, st = False, time.perf_counter()
-    dev = Device[lin.opts.device]
-    while not exiting:
-      acted_lins: List[Linearizer] = flatten([get_linearizer_actions(lin, include_0=False).values() for lin,_ in beam]) if len(beam) else [lin]
-      timed_lins: List[Tuple[Linearizer, float]] = []
+    seen_libs = set()
+    timed_lins: List[Tuple[Linearizer, float]] = None
+
+    search_coro = _beam_search(lin, rawbufs, amt, allow_test_size=allow_test_size)
+    while 1:
+      acted_lins, rawbufs, var_vals, dev, early_stop = search_coro.send(timed_lins)
+      timed_lins = []
+
+      st = time.perf_counter()
       _compile_fn = functools.partial(_try_compile_linearized_w_idx, compiler=dev.compiler)
-      for i,proc in (map(_compile_fn, enumerate(acted_lins)) if beam_pool is None else beam_pool.imap_unordered(_compile_fn, enumerate(acted_lins))):
+      for i, proc in (map(_compile_fn, enumerate(acted_lins)) if beam_pool is None else beam_pool.imap_unordered(_compile_fn, enumerate(acted_lins))):
         if proc is None: continue
         lib, global_size, local_size, vars, outcount, compile_et, num_uops = proc
         if lib in seen_libs: continue
-        #print(acted_lins[i].colored_shape(), acted_lins[i].applied_opts)  # for debugging BEAMs that segfault
+        # print(acted_lins[i].colored_shape(), acted_lins[i].applied_opts)  # for debugging BEAMs that segfault
         seen_libs.add(lib)
-        try: tms = _time_program(vars, outcount, dev, lib, global_size, local_size, var_vals, rawbufs, early_stop=beam[0][1]*3 if len(beam) else 1.0)
-        except RuntimeError: continue # for runtime issues
+        try:
+          tms = _time_program(vars, outcount, dev, lib, global_size, local_size, var_vals, rawbufs, early_stop=early_stop)
+        except RuntimeError:
+          continue  # for runtime issues
         timed_lins.append((acted_lins[i], min(tms)))
-        if getenv("BEAM_LOG") > 0: print(f"{time.perf_counter() - st:7.2f}s: {i:5d} {num_uops:5d} uops {compile_et*1e6:12.2f} us compile/{timed_lins[-1][1]*1e6:12.2f} us run       {len(timed_lins):4d}/{len(acted_lins):4d}         {timed_lins[-1][0].colored_shape()}")  # noqa: E501
-        elif DEBUG >= 2: print(f"\r{time.perf_counter() - st:7.2f}s: {timed_lins[-1][1]*1e6:12.2f} us       {len(timed_lins):4d}/{len(acted_lins):4d}         {timed_lins[-1][0].colored_shape()}\033[K", end="")  # noqa: E501
-
-      # done
-      opts = sorted(timed_lins, key=lambda x: x[1])
-      exiting = len(opts) == 0 or (len(beam) > 0 and ((beam[0][1]-opts[0][1])*1e6 < min_progress_micros))
-      if not exiting: beam = opts[:amt]
-      elif len(opts) > 0 and opts[0][1] < beam[0][1]: beam = opts[:1]
-      assert len(beam) > 0, "no BEAM items succeeded?!?" # this asserts in unet3d multi-gpu, need to figure out why
-      if DEBUG >= 2: print(f"\r{time.perf_counter() - st:7.2f}s:", colored(f"{beam[0][1]*1e6:12.2f} us", "green" if exiting else None), f"from {len(acted_lins):3d} -> {len(opts):3d} actions\033[K", beam[0][0].colored_shape())  # noqa: E501
+        if getenv("BEAM_LOG") > 0:
+          print(
+            f"{time.perf_counter() - st:7.2f}s: {i:5d} {num_uops:5d} uops {compile_et * 1e6:12.2f} us compile/{timed_lins[-1][1] * 1e6:12.2f} us run       {len(timed_lins):4d}/{len(acted_lins):4d}         {timed_lins[-1][0].colored_shape()}")  # noqa: E501
+        elif DEBUG >= 2:
+          print(f"\r{time.perf_counter() - st:7.2f}s: {timed_lins[-1][1] * 1e6:12.2f} us       {len(timed_lins):4d}/{len(acted_lins):4d}         {timed_lins[-1][0].colored_shape()}\033[K", end="")  # noqa: E501
+  except StopIteration as e:
+    return e.value
   except KeyboardInterrupt as e:
     if beam_pool is not None: beam_pool.terminate()
     raise e
-
-  if CACHELEVEL >= 1: diskcache_put("beam_search", key, beam[0][0].applied_opts)
-  return beam[0][0]
 
 def optimize_local_size(clprg:Callable, global_size:List[int], rawbufs:List[Buffer]) -> List[int]:
   test_rawbuffers = [Buffer(rawbufs[0].device, rawbufs[0].size, rawbufs[0].dtype).allocate(), *rawbufs[1:]] if rawbufs[0] in rawbufs[1:] else rawbufs
