@@ -130,11 +130,6 @@ def _beam_search(lin:Linearizer, rawbufs:List[Buffer], amt:int, allow_test_size=
   if CACHELEVEL >= 1: diskcache_put("beam_search", key, beam[0][0].applied_opts)
   return beam[0][0]
 
-class GeneratorWrapper:
-  def __init__(self, gen): self.gen = gen
-
-  def send(self, x): self.gen.send(x)
-  def __iter__(self): self.value = yield from self.gen
 def async_compile_engine(coros, allow_parallel=True) -> Generator[Any, None, None]:
   global beam_pool
   from collections import deque
@@ -146,13 +141,13 @@ def async_compile_engine(coros, allow_parallel=True) -> Generator[Any, None, Non
     beam_pool = multiprocessing.get_context("spawn").Pool(PARALLEL, _init_worker, (), getenv("BEAM_MAX_TASKS_PER_CHILD", 16))
 
   try:
-    seen_libs = set()
+    seen_libs = {}
     q = deque(coros)
     working = []
     working_timed = []
     completed = []
     while q or working:
-      while q and len(working) < max(PARALLEL, 1):
+      while q and len(working) < max(getenv("COMPILE_QDEPTH", default_parallel), 1):
         new_coro = q.popleft()
         working.append(new_coro)
         working_timed.append(None)
@@ -162,10 +157,12 @@ def async_compile_engine(coros, allow_parallel=True) -> Generator[Any, None, Non
 
       compile_jobs = {}
       for job_i, (search_coro, timed_lins) in enumerate(zip(working, working_timed)):
+        if completed[job_i] is not None: continue
         try:
           acted_lins, rawbufs, var_vals, dev, early_stop = search_coro.send(timed_lins)
         except StopIteration as e:
-          completed[job_i] = e.value
+          completed[job_i] = (e.value,)
+          assert e.value is not None
           continue
         for lin_i, acted_lin in enumerate(acted_lins): compile_jobs[job_i, lin_i] = (acted_lin, rawbufs, var_vals, dev, early_stop)
         working_timed[job_i] = []
@@ -175,25 +172,29 @@ def async_compile_engine(coros, allow_parallel=True) -> Generator[Any, None, Non
       for (job_i, lin_i), proc in mapper(_compile_fn, [((job_i, lin_i), acted_lin, dev.compiler) for (job_i, lin_i), (acted_lin, _, _, dev, _) in compile_jobs.items()]):
         if proc is None: continue
         lib, global_size, local_size, vars, outcount, compile_et, num_uops = proc
-        if lib in seen_libs: continue
-        # print(acted_lins[i].colored_shape(), acted_lins[i].applied_opts)  # for debugging BEAMs that segfault
-        seen_libs.add(lib)
         acted_lin, rawbufs, var_vals, dev, early_stop = compile_jobs[job_i, lin_i]
+        if (lib, tuple(global_size), tuple(local_size)) in seen_libs:
+          working_timed[job_i].append((acted_lin, seen_libs[(lib, tuple(global_size), tuple(local_size))]))
+          continue
+        # print(acted_lins[i].colored_shape(), acted_lins[i].applied_opts)  # for debugging BEAMs that segfault
         try:
           tms = _time_program(vars, outcount, dev, lib, global_size, local_size, var_vals, rawbufs, early_stop=early_stop)
         except RuntimeError:
+          import traceback
+          traceback.print_exc()
           continue  # for runtime issues
         working_timed[job_i].append((acted_lin, min(tms)))
+        seen_libs[(lib, tuple(global_size), tuple(local_size))] = min(tms)
         if getenv("BEAM_LOG") > 0:
           print(
             f"{time.perf_counter() - st:7.2f}s: {lin_i:5d} {num_uops:5d} uops {compile_et * 1e6:12.2f} us compile/{min(tms) * 1e6:12.2f} us run       {len(working_timed[job_i]):4d}/{len(compile_jobs):4d}         {acted_lin.colored_shape()}")  # noqa: E501
         elif DEBUG >= 2:
           print(f"\r{time.perf_counter() - st:7.2f}s: {min(tms) * 1e6:12.2f} us       {len(working_timed[job_i]):4d}/{len(compile_jobs):4d}         {acted_lin.colored_shape()}\033[K", end="")  # noqa: E501
 
-      if completed[0] is not None:
+      while len(working) and completed[0] is not None:
         working.pop(0)
         working_timed.pop(0)
-        yield completed.pop(0)
+        yield completed.pop(0)[0]
   except KeyboardInterrupt as e:
     if beam_pool is not None: beam_pool.terminate()
     beam_pool = None

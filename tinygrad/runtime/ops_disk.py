@@ -89,3 +89,6 @@ class DiskDevice(Compiled):
   def get_runner(self, *ast:LazyOp):
     assert len(ast) == 1, "DiskRunner doesn't support multioutput kernels."
     return DiskRunner(ast[0])
+  def get_runner_async(self, *ast:LazyOp):
+    return self.get_runner(*ast)
+    yield

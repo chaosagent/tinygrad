@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional, cast, Generator, DefaultDict, Tuple, Iterable
+from typing import List, Dict, Optional, cast, Generator, DefaultDict, Tuple, Iterable, Any
 from collections import defaultdict
 from dataclasses import dataclass
 from tinygrad.dtype import DType
@@ -7,6 +7,7 @@ from tinygrad.ops import ScheduleItem, BufferOps, LoadOps, copy_ast
 from tinygrad.device import Runner, Device, BufferCopy, BufferXfer
 from tinygrad.buffer import Buffer
 from tinygrad.shape.symbolic import Variable, sym_infer
+from tinygrad.features.graph import print_tree
 
 @dataclass(frozen=True)
 class ExecItem:
@@ -36,9 +37,11 @@ class EmptyOp(Runner):
   def __init__(self, buf:Buffer): super().__init__(colored(f"empty {buf.size:10d} {buf.dtype}", "yellow"), buf.device)
   def __call__(self, rawbufs:List[Buffer], var_vals:Dict[Variable, int], wait=False): pass
 
-def lower_schedule_item(si:ScheduleItem) -> Runner:
+def lower_schedule_item_async(si:ScheduleItem) -> Generator[Runner, Any, Any]:
   assert len(set(x.device for x in si.bufs)) == 1 or si.ast[0].op is LoadOps.COPY
-  if si.ast[0].op is BufferOps.STORE: return Device[si.outputs[0].device].get_runner(*si.ast)
+  if si.ast[0].op is BufferOps.STORE:
+    print_tree(si.ast[0])
+    return (yield from Device[si.outputs[0].device].get_runner_async(*si.ast))
   assert len(si.ast) == 1 and len(si.outputs) == 1, "only ASTRunner supports multioutput"
   out, ast = si.outputs[0], si.ast[0]
   if ast.op is LoadOps.COPY:
@@ -52,7 +55,9 @@ def lower_schedule_item(si:ScheduleItem) -> Runner:
   raise RuntimeError(f"don't know how to lower {ast}")
 
 def lower_schedule(schedule:List[ScheduleItem]) -> Generator[ExecItem, None, None]:
-  while len(schedule): yield ExecItem(lower_schedule_item(si:=schedule.pop(0)), list(si.bufs))
+  from tinygrad.features.search import async_compile_engine
+  ace = async_compile_engine([lower_schedule_item_async(si) for si in schedule])
+  for runner, si in zip(ace, schedule): yield ExecItem(runner, list(si.bufs))
 
 capturing: List = []  # put classes with an add method in here
 
