@@ -1,4 +1,4 @@
-from typing import Dict, List, cast, DefaultDict, Optional, Tuple, Callable, Generator
+from typing import Dict, List, cast, DefaultDict, Optional, Tuple, Callable, Generator, Any
 import itertools, functools, random, math, time, multiprocessing, traceback, signal
 from collections import defaultdict
 from tinygrad.device import Device, Compiled, Buffer, CompiledRunner, Compiler
@@ -56,8 +56,8 @@ def _compile_linearizer(compiler:Compiler, lin:Linearizer, name:Optional[str]=No
   et = time.perf_counter() - st
   return prog, lin.global_size, lin.local_size, lin.uops.vars(), len(lin.outbufs), et, len(lin.uops.uops)
 
-def _try_compile_linearized_w_idx(x:Tuple[int,Linearizer], compiler:Compiler):
-  try: return x[0], _compile_linearizer(compiler, x[1], "test", enforce_max=True)
+def _try_compile_linearized_w_idx(x:Tuple[Any,Linearizer, Compiler]):
+  try: return x[0], _compile_linearizer(x[2], x[1], "test", enforce_max=True)
   except Exception:
     if DEBUG >= 4: traceback.print_exc()
     return x[0], None
@@ -135,44 +135,68 @@ class GeneratorWrapper:
 
   def send(self, x): self.gen.send(x)
   def __iter__(self): self.value = yield from self.gen
-def beam_search(lin:Linearizer, rawbufs:List[Buffer], amt:int, allow_test_size=True) -> Linearizer:
+def async_compile_engine(coros, allow_parallel=True) -> Generator[Linearizer, None, None]:
   global beam_pool
+  from collections import deque
 
-  default_parallel = 1 if lin.opts.device in {"CUDA", "HSA", "AMD", "NV"} else 0
-  if beam_pool is None and getenv("PARALLEL", default_parallel):
-    beam_pool = multiprocessing.get_context("spawn").Pool(multiprocessing.cpu_count(), _init_worker, (), getenv("BEAM_MAX_TASKS_PER_CHILD", 16))
+  #default_parallel = multiprocessing.cpu_count() if all([lin.opts.device in {"CUDA", "HSA", "AMD", "NV"} for lin, _ in lin_rawbufs]) else 0
+  default_parallel = multiprocessing.cpu_count() if allow_parallel else 0
+  PARALLEL = getenv("parallel", default_parallel)
+  if beam_pool is None and PARALLEL:
+    beam_pool = multiprocessing.get_context("spawn").Pool(PARALLEL, _init_worker, (), getenv("BEAM_MAX_TASKS_PER_CHILD", 16))
 
   try:
     seen_libs = set()
-    timed_lins: List[Tuple[Linearizer, float]] = None
-
-    search_coro = _beam_search(lin, rawbufs, amt, allow_test_size=allow_test_size)
-    while 1:
-      acted_lins, rawbufs, var_vals, dev, early_stop = search_coro.send(timed_lins)
-      timed_lins = []
+    q = deque(coros)
+    working = []
+    working_timed = []
+    completed = []
+    while q or working:
+      while q and len(working) < max(PARALLEL, 1):
+        new_coro = q.popleft()
+        working.append(new_coro)
+        working_timed.append(None)
+        completed.append(None)
 
       st = time.perf_counter()
-      _compile_fn = functools.partial(_try_compile_linearized_w_idx, compiler=dev.compiler)
-      for i, proc in (map(_compile_fn, enumerate(acted_lins)) if beam_pool is None else beam_pool.imap_unordered(_compile_fn, enumerate(acted_lins))):
+
+      compile_jobs = {}
+      for job_i, (search_coro, timed_lins) in enumerate(zip(working, working_timed)):
+        try:
+          acted_lins, rawbufs, var_vals, dev, early_stop = search_coro.send(timed_lins)
+        except StopIteration as e:
+          completed[job_i] = e.value
+          continue
+        for lin_i, acted_lin in enumerate(acted_lins): compile_jobs[job_i, lin_i] = (acted_lin, rawbufs, var_vals, dev, early_stop)
+        working_timed[job_i] = []
+
+      _compile_fn = _try_compile_linearized_w_idx
+      mapper = map if beam_pool is None else beam_pool.imap_unordered
+      for (job_i, lin_i), proc in mapper(_compile_fn, [((job_i, lin_i), acted_lin, dev.compiler) for (job_i, lin_i), (acted_lin, _, _, dev, _) in compile_jobs.items()]):
         if proc is None: continue
         lib, global_size, local_size, vars, outcount, compile_et, num_uops = proc
         if lib in seen_libs: continue
         # print(acted_lins[i].colored_shape(), acted_lins[i].applied_opts)  # for debugging BEAMs that segfault
         seen_libs.add(lib)
+        acted_lin, rawbufs, var_vals, dev, early_stop = compile_jobs[job_i, lin_i]
         try:
           tms = _time_program(vars, outcount, dev, lib, global_size, local_size, var_vals, rawbufs, early_stop=early_stop)
         except RuntimeError:
           continue  # for runtime issues
-        timed_lins.append((acted_lins[i], min(tms)))
+        working_timed[job_i].append((acted_lin, min(tms)))
         if getenv("BEAM_LOG") > 0:
           print(
-            f"{time.perf_counter() - st:7.2f}s: {i:5d} {num_uops:5d} uops {compile_et * 1e6:12.2f} us compile/{timed_lins[-1][1] * 1e6:12.2f} us run       {len(timed_lins):4d}/{len(acted_lins):4d}         {timed_lins[-1][0].colored_shape()}")  # noqa: E501
+            f"{time.perf_counter() - st:7.2f}s: {lin_i:5d} {num_uops:5d} uops {compile_et * 1e6:12.2f} us compile/{min(tms) * 1e6:12.2f} us run       {len(working_timed[job_i]):4d}/{len(compile_jobs):4d}         {acted_lin.colored_shape()}")  # noqa: E501
         elif DEBUG >= 2:
-          print(f"\r{time.perf_counter() - st:7.2f}s: {timed_lins[-1][1] * 1e6:12.2f} us       {len(timed_lins):4d}/{len(acted_lins):4d}         {timed_lins[-1][0].colored_shape()}\033[K", end="")  # noqa: E501
-  except StopIteration as e:
-    return e.value
+          print(f"\r{time.perf_counter() - st:7.2f}s: {min(tms) * 1e6:12.2f} us       {len(working_timed[job_i]):4d}/{len(compile_jobs):4d}         {acted_lin.colored_shape()}\033[K", end="")  # noqa: E501
+
+      if completed[0] is not None:
+        working.pop(0)
+        working_timed.pop(0)
+        yield completed.pop(0)
   except KeyboardInterrupt as e:
     if beam_pool is not None: beam_pool.terminate()
+    beam_pool = None
     raise e
 
 def optimize_local_size(clprg:Callable, global_size:List[int], rawbufs:List[Buffer]) -> List[int]:

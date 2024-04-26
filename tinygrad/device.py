@@ -203,7 +203,7 @@ class Compiled:
                          k.uops.vars(), min(info.flops, ops * run_count), min(info.mem_estimate, mem * run_count), outcount=len(k.outbufs))
     return ret
 
-  def get_linearizer(self, *ast:LazyOp) -> Linearizer:
+  def get_linearizer_async(self, *ast:LazyOp) -> Linearizer:
     assert self.compiler is not None, "compiler is required to build AST"
     if DEBUG >= 3:
       from tinygrad.features.graph import print_tree
@@ -214,11 +214,11 @@ class Compiled:
     if not NOOPT:
       if not (used_tensor_cores:=k.apply_tensor_cores(getenv("TC", 1))): k.hand_coded_optimizations()
       if BEAM >= 1:
-        from tinygrad.features.search import beam_search, time_linearizer, bufs_from_lin
+        from tinygrad.features.search import _beam_search, time_linearizer, bufs_from_lin
         kb, k_opt = Linearizer(*ast, opts=self.compiler.compiler_opts), k
         kb.required_optimizations()
         rawbufs = bufs_from_lin(kb, allocate=False)
-        k = beam_search(kb, rawbufs, BEAM.value, bool(getenv("BEAM_ESTIMATE", 1)))
+        k = yield from _beam_search(kb, rawbufs, BEAM.value, bool(getenv("BEAM_ESTIMATE", 1)))
         if getenv("BEAM_COMPARE", 1):
           # TODO: move the HC/TC/BEAM compare to beam_search so it can be optionally cached which choice is better
           lins: List[Tuple[str, Linearizer]] = [(f"beam{BEAM.value}", k), (("tc" if used_tensor_cores else "hc"), k_opt)]
@@ -235,12 +235,13 @@ class Compiled:
     return k
 
   def get_runner(self, *ast:LazyOp) -> CompiledRunner:
+    from tinygrad.features.search import async_compile_engine
     ckey = (self.dname, ast, BEAM.value, False)
     if cret:=method_cache.get(ckey): return cret
     bkey = (self.dname.split(":")[0], ast, BEAM.value, True)
     if bret:=method_cache.get(bkey):
       method_cache[ckey] = ret = bret.to_other_device(self.dname)
     else:
-      method_cache[ckey] = method_cache[bkey] = ret = self.to_program(self.get_linearizer(*ast))
+      method_cache[ckey] = method_cache[bkey] = ret = self.to_program(next(async_compile_engine([self.get_linearizer_async(*ast)])))
     return ret
 
