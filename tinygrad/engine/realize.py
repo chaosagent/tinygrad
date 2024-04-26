@@ -7,7 +7,6 @@ from tinygrad.ops import ScheduleItem, BufferOps, LoadOps, copy_ast
 from tinygrad.device import Runner, Device, BufferCopy, BufferXfer
 from tinygrad.buffer import Buffer
 from tinygrad.shape.symbolic import Variable, sym_infer
-from tinygrad.features.graph import print_tree
 
 @dataclass(frozen=True)
 class ExecItem:
@@ -39,9 +38,7 @@ class EmptyOp(Runner):
 
 def lower_schedule_item_async(si:ScheduleItem) -> Generator[Runner, Any, Any]:
   assert len(set(x.device for x in si.bufs)) == 1 or si.ast[0].op is LoadOps.COPY
-  if si.ast[0].op is BufferOps.STORE:
-    print_tree(si.ast[0])
-    return (yield from Device[si.outputs[0].device].get_runner_async(*si.ast))
+  if si.ast[0].op is BufferOps.STORE: return (yield from Device[si.outputs[0].device].get_runner_async(*si.ast))
   assert len(si.ast) == 1 and len(si.outputs) == 1, "only ASTRunner supports multioutput"
   out, ast = si.outputs[0], si.ast[0]
   if ast.op is LoadOps.COPY:
