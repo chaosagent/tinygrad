@@ -135,7 +135,7 @@ class GeneratorWrapper:
 
   def send(self, x): self.gen.send(x)
   def __iter__(self): self.value = yield from self.gen
-def async_compile_engine(coros, allow_parallel=True) -> Generator[Linearizer, None, None]:
+def async_compile_engine(coros, allow_parallel=True) -> Generator[Any, None, None]:
   global beam_pool
   from collections import deque
 

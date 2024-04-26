@@ -1,7 +1,7 @@
 from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, List, Optional, Dict, Tuple, ClassVar, cast
+from typing import TYPE_CHECKING, Any, List, Optional, Dict, Tuple, ClassVar, cast, Generator
 import importlib, inspect, functools, pathlib, time, ctypes, os
 from tinygrad.helpers import prod, getenv, colored, all_int, to_function_name, from_mv, flat_mv, diskcache_get, diskcache_put, DEBUG, BEAM, NOOPT
 from tinygrad.shape.symbolic import Variable, sym_infer, sint
@@ -203,7 +203,7 @@ class Compiled:
                          k.uops.vars(), min(info.flops, ops * run_count), min(info.mem_estimate, mem * run_count), outcount=len(k.outbufs))
     return ret
 
-  def get_linearizer_async(self, *ast:LazyOp) -> Linearizer:
+  def get_linearizer_async(self, *ast:LazyOp) -> Generator[Any, Any, Linearizer]:
     assert self.compiler is not None, "compiler is required to build AST"
     if DEBUG >= 3:
       from tinygrad.features.graph import print_tree
@@ -234,14 +234,17 @@ class Compiled:
     if DEBUG >= 4: print((k.ast, k.applied_opts)) # print here to show final applied_opts for all kernels instead of just in beam_search
     return k
 
-  def get_runner(self, *ast:LazyOp) -> CompiledRunner:
-    from tinygrad.features.search import async_compile_engine
+  def get_runner_async(self, *ast:LazyOp) -> Generator[Any, Any, CompiledRunner]:
     ckey = (self.dname, ast, BEAM.value, False)
     if cret:=method_cache.get(ckey): return cret
     bkey = (self.dname.split(":")[0], ast, BEAM.value, True)
     if bret:=method_cache.get(bkey):
       method_cache[ckey] = ret = bret.to_other_device(self.dname)
     else:
-      method_cache[ckey] = method_cache[bkey] = ret = self.to_program(next(async_compile_engine([self.get_linearizer_async(*ast)])))
+      lin = yield from self.get_linearizer_async(*ast)
+      method_cache[ckey] = method_cache[bkey] = ret = self.to_program(lin)
     return ret
+  def get_runner(self, *ast:LazyOp) -> CompiledRunner:
+    from tinygrad.features.search import async_compile_engine
+    return next(async_compile_engine([self.get_runner_async(*ast)]))
 
