@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
-from tinygrad.helpers import GRAPH, DEBUG, GlobalCounters, prod, dedup, all_int
+from tinygrad.helpers import GRAPH, DEBUG, GlobalCounters, prod, dedup, all_int, getenv
 from tinygrad.shape.symbolic import Variable
 from tinygrad.dtype import ImageDType, dtypes
 from tinygrad.lazy import LazyBuffer
@@ -68,7 +68,7 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
     assert st.contiguous, "ReduceOps late fusion must be contiguous"
     st = ShapeTracker.from_shape(buf.srcs[0].shape)
 
-  if buf.op is BinaryOps.MUL:
+  if buf.op is BinaryOps.MUL and getenv("MUL_MASK_OPT", 1):
     src_ops = tuple(_recursive_lazyop(x, membufs, var_vals, ShapeTracker.from_shape(st.shape), realizes, cache, False, assign_to, assign_idx) for x in buf.srcs)
     if not any(lop.op in ReduceOps for src_op in src_ops for lop in src_op.lazyops):
       from tinygrad.features.graph import print_tree
@@ -113,7 +113,9 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
           mask_part0 = tuple([(0, s) for s in view.shape])
           mask_part1 = tuple([(0, s) for s in view.shape])
         for src_i, src_op_sts in enumerate(src_sts):
-          st_update = ShapeTracker((View.create(view.shape, strides=tuple((strd if i in mask_assignment[src_i] else 0) for i, strd in enumerate(view.strides)), offset=view.offset, mask=mask_part0 if src_i == 0 else mask_part1),))
+          st_update = ShapeTracker((View.create(view.shape, strides=tuple((strd if i in mask_assignment[src_i] else 0) for i, strd in enumerate(view.strides)),
+                                                offset=view.offset + sum([0 if i in mask_assignment[src_i] else a * strd for i, ((a, b), strd) in enumerate(zip(view_mask, view.strides))]),
+                                                mask=mask_part0 if src_i == 0 else mask_part1),))
           if DEBUG >= 3: print(f'st_update[{src_i}]', st_update)
           mangled_sts[src_i] = mangled_sts[src_i] + st_update
           if DEBUG >= 3: print(f'mangled_sts[{src_i}]', mangled_sts[src_i])
