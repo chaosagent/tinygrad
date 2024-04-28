@@ -6,6 +6,7 @@ from tinygrad import Tensor, TinyJit, GlobalCounters, Device
 from tinygrad.helpers import getenv, Context
 from tinygrad.nn.optim import SGD
 from tinygrad.nn.state import get_parameters
+from tinygrad.engine.schedule import create_schedule
 from tinygrad.engine.realize import run_schedule
 
 from extra.models import resnet
@@ -67,7 +68,7 @@ class BenchmarkResnetTrain(unittest.TestCase):
     return f"{name} x{(bs, cin, xy, xy)}", [layer], cin, xy
   def _test_layer(self, name, layer, cin, xy):
     optim = SGD(get_parameters(layer), bs / 128 * 1.0)  # need sgd for some params but not consequential for benchmarking
-    with Context(SAVE_SCHEDULE=0): Tensor.realize(*[t.assign(t.detach().contiguous()) for t in get_parameters(optim)])
+    Tensor.corealize([t.assign(t.detach().contiguous()) for t in get_parameters(optim)])
 
     JITCNT = getenv("JITCNT", 1)
     Tensor.training = True
@@ -78,8 +79,8 @@ class BenchmarkResnetTrain(unittest.TestCase):
 
       y = x.sequential(layer).contiguous()
       y.sum().backward()
-      if getenv("ASSIGN", 1): sched, _ = Tensor.schedule_with_vars(y, x.grad, *optim.schedule_step())
-      else: sched, _ = Tensor.schedule_with_vars(y, x.grad, *[t.grad for t in optim.params])
+      if getenv("ASSIGN", 1): sched = create_schedule([t.lazydata for t in [y, x.grad, *optim.schedule_step()]])
+      else: sched = create_schedule([t.lazydata for t in [y, x.grad, *[t.grad for t in optim.params]]])
 
       for _ in range(JITCNT):
         run_schedule([si for si in sched])
@@ -88,7 +89,7 @@ class BenchmarkResnetTrain(unittest.TestCase):
     best_tm = None
     flops, mem_used, mem, kernels = None, None, None, None
     for i in range(CNT):
-      with Context(SAVE_SCHEDULE=0): x = Tensor.randn(bs, cin, xy, xy, requires_grad=True).realize()
+      x = Tensor.randn(bs, cin, xy, xy, requires_grad=True).realize()
       GlobalCounters.reset()
 
       st = time.perf_counter()
