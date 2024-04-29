@@ -95,6 +95,20 @@ def get_linearizer_actions(lin:Linearizer, include_0=True) -> Dict[int, Lineariz
       if up//tc_up > max_up or lcl > max_lcl: continue
       acted_lins[i+1] = lin2
     except KernelOptError: pass
+    lin3 = Linearizer(*lin.ast, opts=lin.opts)
+    try:
+      lin3.apply_opt(a)
+      for opt in lin.applied_opts: lin3.apply_opt(opt)
+      up, lcl, tc_up = 1, 1, prod(tc.dims) // prod([x[1] for x in tc.threads]) if (tc := lin3.tensor_core) else 1
+      for s, c in zip(lin3.full_shape, lin3.colors()):
+        if c in {"magenta", "yellow"}:
+          up *= s
+        elif c in {"cyan", "green", "white"}:
+          lcl *= s
+      if up // tc_up > max_up or lcl > max_lcl: continue
+      acted_lins[len(actions)+i + 1] = lin3
+    except KernelOptError:
+      pass
   return acted_lins
 
 beam_pool = None

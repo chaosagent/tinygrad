@@ -346,9 +346,9 @@ class Kernel:
           return None
         if (buf0:=buf_index(mul_op.src[0])) is None or (buf1:=buf_index(mul_op.src[1])) is None: continue
 
-        buf0_strides, buf1_strides, reduce_szs = self.sts[buf0].real_strides(debug=True), self.sts[buf1].real_strides(debug=True), self.full_shape[self.first_reduce:self.shape_len-self.upcasted]
-        axis_buf0 = [(i,self.full_shape[i],buf1_strides[i], self.full_shape[i]%tc.dims[0] != 0) for i,s in enumerate(buf0_strides[:self.first_reduce]) if s == 0]  # noqa: E501
-        axis_buf1 = [(i,self.full_shape[i],buf0_strides[i], self.full_shape[i]%tc.dims[1] != 0) for i,s in enumerate(buf1_strides[:self.first_reduce]) if s == 0]  # noqa: E501
+        buf0_strides, buf1_strides, reduce_szs = self.sts[buf0].real_strides(debug=True), self.sts[buf1].real_strides(debug=True), self.full_shape[self.first_reduce + self.group_for_reduces:self.shape_len-self.upcasted]
+        axis_buf0 = [(i,self.full_shape[i],buf1_strides[i], self.full_shape[i]%tc.dims[0] != 0) for i,s in enumerate(buf0_strides[:self.first_reduce - self.local_dims]) if s == 0]  # noqa: E501
+        axis_buf1 = [(i,self.full_shape[i],buf0_strides[i], self.full_shape[i]%tc.dims[1] != 0) for i,s in enumerate(buf1_strides[:self.first_reduce - self.local_dims]) if s == 0]  # noqa: E501
         axis_buf0.sort(key=lambda x: x[-1])
         axis_buf1.sort(key=lambda x: x[-1])
         reduce_szs = [(i, sz) for i, sz in enumerate(reduce_szs)]
@@ -367,11 +367,11 @@ class Kernel:
         assert s0 != s1 and self.full_shape[s0]%tc.dims[0] == 0 and self.full_shape[s1]%tc.dims[1] == 0 and self.full_shape[self.first_reduce+sr] % tc.dims[2] == 0
 
         # tensor core -- unroll the reduce dim, upcast input, then create the correct thread pattern
-        if DEBUG >= 3: print("TENSOR CORES", axis_choices[-(axis+1)], tc)
+        if DEBUG >= 3: print("TENSOR CORES", axis_choices[-(axis+1)], tc, self.applied_opts)
         self.tensor_core_opts = (tc_opts:=TensorCoreOptions(bufs=(buf0, buf1), axes=[s0, s1], axes_exist=[True, True]))
-        self.apply_opt(Opt(OptOps.UNROLL, sr, tc.dims[2]), append_opt=False)
         for i, sz in enumerate([prod(x) for x in [[x[1] for x in tc.threads if x[0]==dim] for dim in range(2)]]): # upcast non-local'd N, M
           if tc.dims[i] > sz: self.apply_opt(Opt(OptOps.UPCAST, tc_opts.axes[i], tc.dims[i]//sz), append_opt=False)
+        self.apply_opt(Opt(OptOps.UNROLL, sr, tc.dims[2]), append_opt=False)
         for (tc_dim, tc_amt) in tc.threads:
           self.apply_opt(Opt(OptOps.LOCAL, tc_opts.axes[tc_dim], tc_amt), append_opt=False)
 
@@ -411,7 +411,8 @@ class Kernel:
     check(not self.dont_use_locals or opt.op not in {OptOps.LOCAL, OptOps.GROUP, OptOps.GROUPTOP, OptOps.UPCASTMID}, "not using locals")
 
     if opt.op is OptOps.TC:
-      check(len(self.applied_opts) == 0, "tensor core opts must be first") # TODO: things like PADTO might be fine
+      #check(len(self.applied_opts) == 0, "tensor core opts must be first") # TODO: things like PADTO might be fine
+      check(all(opt.op in [OptOps.UPCAST, OptOps.UNROLL] for opt in self.applied_opts), "tensor core opts must be first")
       check(opt.axis is not None and opt.amt is not None, "tensor core opts must have an axis and amt")
       check((use_tensor_cores:=getenv("TC", 1)) == 2 or self.opts.has_tensor_cores, "must have tensor cores or TC=2")
       check(self._apply_tc_opt(use_tensor_cores, cast(int, opt.axis), cast(int, opt.amt)), "no tensor core available")
@@ -454,13 +455,13 @@ class Kernel:
       #self.shift_to(axis, amt, insert_before=None if upcast_count == 0 else self.shape_len-upcast_count)
       if self.full_shape[axis] == amt and axis == self.first_reduce: self.local_dims += 1 # first_reduce will ++, so offset loss in simplify_ones
       if self.full_shape[axis] == amt and axis < self.first_reduce+self.group_for_reduces: self.group_for_reduces -= 1 # fully unrolling a GROUP
-      self.shift_to(axis, amt, insert_before=None)
+      self.shift_to(axis, amt, insert_before=None if append_opt else self.shape_len - self.upcasted)
       self.upcast()
     elif opt.op is OptOps.UPCAST:                     # yellow
       check(axis < self.first_reduce, "upcast is for non-reduce")
       check(not(self.tensor_core and axis >= self.first_reduce-len(self.tensor_core.threads)), "can't upcast TC locals")
       check(amt <= 8, "don't upcast more than 8")
-      self.shift_to(axis, amt, insert_before=None)
+      self.shift_to(axis, amt, insert_before=None if append_opt else self.shape_len - self.upcasted)
       self.upcast()
     elif opt.op is OptOps.UPCASTMID:                  # white
       check(self.bufs[0].dtype.name.startswith('image') and not self.float4_axis(0) and self.group_for_reduces != 0 and self.first_reduce <= 2 and prod(self.sts[0].shape) > 1, "invalid upcast mid reduce")  # noqa: E501

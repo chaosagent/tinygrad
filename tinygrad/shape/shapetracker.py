@@ -64,7 +64,7 @@ class ShapeTracker:
     if len(self.views) == 1 and self.views[-1].mask is None: return self.views[-1].strides
     idxs: List[Node] = [Variable(f"idx{i}", 0, s-1) for i,s in enumerate(self.shape)]
     idx, valid = self.expr_idxs(idxs)
-    if debug and DEBUG >= 3: print(idx, valid)
+    if debug and DEBUG >= 4: print(idx, valid)
     ret: List[Optional[sint]] = [None] * len(self.views[-1].shape)
     bad_idx_vars: Set[Variable] = set()
     for this_dim in (idx.nodes if isinstance(idx, SumNode) else [idx]):
@@ -80,6 +80,7 @@ class ShapeTracker:
   def unit_stride_axes(self, ignore_valid=False) -> List[int]: return [i for i,st in enumerate(self.real_strides(ignore_valid)) if st == 1]
 
   def expr_idxs(self, idxs:Optional[Iterable[Node]]=None) -> Tuple[Node, Node]:
+    #return self.expr_idxs2(idxs)
     idxs = [Variable(f"idx{i}", 0, s-1) for i,s in enumerate(self.shape)] if idxs is None else list(idxs)
     idx, valid = _expr_view(self.views[-1], idxs)
     for view in reversed(self.views[0:-1]):
@@ -91,6 +92,29 @@ class ShapeTracker:
         acc *= d
       idx, valid = _expr_view(view, idxs[::-1], valid)
     return idx, valid
+  # this is broken
+  def expr_idxs2(self, idxs:Optional[Iterable[Node]]=None) -> Tuple[Node, Node]:
+    last_expr, last_valid, last_idxs, last_view = None, None, None, None
+    for view in self.views:
+      view = view.minify()
+      _idxs = [Variable(f"idx{i}", 0, s-1) for i,s in enumerate(view.shape)]
+      idx, valid = _expr_view(view, _idxs)
+      if valid.max == 0: return NumNode(-1), valid
+      if last_idxs is None:
+        last_expr, last_valid, last_idxs, last_view = idx, valid, _idxs, view
+        continue
+      acc, new_idxs = 1, []
+      for d in reversed(last_view.shape):
+        new_idxs.append((idx//acc)%d)
+        acc *= d
+      new_idxs = new_idxs[::-1]
+      last_expr = last_expr.substitute(dict(zip(last_idxs, new_idxs)))
+      last_valid = Node.ands([last_valid.substitute(dict(zip(last_idxs, new_idxs))), valid])
+      last_idxs = _idxs
+      last_view = view
+    if idxs is not None:
+      return last_expr.substitute(dict(zip(last_idxs, idxs))), last_valid.substitute(dict(zip(last_idxs, idxs)))
+    return last_expr, last_valid
 
   def axis_is_masked(self, axis:int) -> bool:
     _, valid = self.expr_idxs()

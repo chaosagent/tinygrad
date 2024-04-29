@@ -117,6 +117,8 @@ constant_folder = PatternMatcher([
   ({"uop": UOps.ALU, "arg": BinaryOps.DIV, "vin": ({"__name__": "x"}, {"uop": UOps.CONST, "arg": 1})}, lambda x: x),   # x/1 -> x
   # ** zero folding **
   ({"uop": UOps.ALU, "arg": BinaryOps.MUL, "vin": [{}, {"__name__": "c", "uop": UOps.CONST, "arg": 0}]}, lambda c: c), # x*0 -> 0 or 0*x -> 0
+  ({"uop": UOps.WMMA,                      "vin": ({}, {"uop": UOps.CONST, "arg": 0}, {"__name__": "acc"})}, lambda acc: acc),  # x@0 -> 0 or 0@x -> 0
+  ({"uop": UOps.WMMA,                      "vin": ({"uop": UOps.CONST, "arg": 0}, {}, {"__name__": "acc"})}, lambda acc: acc),  # x@0 -> 0 or 0@x -> 0
   ({"uop": UOps.ALU, "arg": BinaryOps.SUB, "vin": ({"__name__": "x"}, {"__name__": "x"})}, lambda x: UOp.const(x.dtype, 0)),   # x-x -> 0
   # ** load/store folding **
   ({"uop": UOps.STORE, "vin": ({"__name__": "buf"}, {"__name__": "idx"},
@@ -368,6 +370,8 @@ class UOpGraph:
 
     # verify the uop types
     self.type_verify()
+
+    if DEBUG >= 3: self.print()
 
   def flops_mem(self) -> Tuple[sint, sint]:
     flops: sint = 0
