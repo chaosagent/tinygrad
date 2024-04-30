@@ -79,7 +79,7 @@ class BenchmarkResnetTrain(unittest.TestCase):
 
       y = x.sequential(layer).contiguous()
       y.sum().backward()
-      if getenv("ASSIGN", 1): sched = create_schedule([t.lazydata for t in [y, x.grad, *optim._step()]])
+      if getenv("ASSIGN", 1): sched = create_schedule([t.lazydata for t in [y, x.grad, *optim._step(), *optim.params, *optim.buffers]])
       else: sched = create_schedule([t.lazydata for t in [y, x.grad, *[t.grad for t in optim.params]]])
 
       for _ in range(JITCNT):

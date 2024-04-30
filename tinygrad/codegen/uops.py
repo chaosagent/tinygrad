@@ -371,7 +371,7 @@ class UOpGraph:
     # verify the uop types
     self.type_verify()
 
-    if DEBUG >= 3: self.print()
+    #if DEBUG >= 3: self.print()
 
   def flops_mem(self) -> Tuple[sint, sint]:
     flops: sint = 0
