@@ -214,7 +214,7 @@ class Linearizer(Kernel):
           buf_idxs[self.first_reduce-len(tc.threads)+n] = replace_input_idxs[n] # replace locals
         for n in range(tc.num_upcasts()):
           buf_idxs[self.shape_len-self.upcasted+n] = replace_input_idxs[len(tc.threads)+n] # replace upcasts
-      if DEBUG >= 3: print(f"{localbuf_idx} alias {i}: sts={self.sts[i]} idxs={buf_idxs}")
+      #if DEBUG >= 3: print(f"{localbuf_idx} alias {i}: sts={self.sts[i]} idxs={buf_idxs}")
       alias_buf_idxs.append((i, localbuf_idx, buf_idxs,))
 
     # define accumulator - modify idxs if necessary for TC
@@ -225,7 +225,7 @@ class Linearizer(Kernel):
         local_idxs[self.local_dims-len(tc.threads)+n] = replace_acc_idxs[n] # replace locals
       for n in range(len(replace_acc_idxs)-len(tc.threads)):
         upcast_idxs[n] = replace_acc_idxs[len(tc.threads)+n] # replace upcasts
-      if DEBUG >= 3: print(f"store alias: sts={self.sts[0]} idxs={global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs}")
+      #if DEBUG >= 3: print(f"store alias: sts={self.sts[0]} idxs={global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs}")
     acc = self.global_load(out_buf, global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, self.get_reduce_acc(reduceop), insert_before=insert_before)
 
     # reduce loop

@@ -60,10 +60,11 @@ class ShapeTracker:
     return ShapeTracker(tuple(unbound_views)), merge_dicts(var_vals)
 
   # NOTE: if a stride is not always valid, it will be None
-  def real_strides(self, ignore_valid=False) -> Tuple[Optional[sint], ...]:
+  def real_strides(self, ignore_valid=False, debug=False) -> Tuple[Optional[sint], ...]:
     if len(self.views) == 1 and self.views[-1].mask is None: return self.views[-1].strides
     idxs: List[Node] = [Variable(f"idx{i}", 0, s-1) for i,s in enumerate(self.shape)]
     idx, valid = self.expr_idxs(idxs)
+    if debug: print(idx, valid)
     ret: List[Optional[sint]] = [None] * len(self.views[-1].shape)
     bad_idx_vars: Set[Variable] = set()
     for this_dim in (idx.nodes if isinstance(idx, SumNode) else [idx]):
