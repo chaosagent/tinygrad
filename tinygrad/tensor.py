@@ -992,10 +992,10 @@ class Tensor:
       o_ = [(i - d * (k-1) - 1)//s + 1 for i,d,k,s in zip(i_, d_, k_, s_)]
       # repeats such that we don't need padding
       xup = self.repeat([(extra_expand[1] if i == extra_expand[0] else 1) for i in range(len(noop_))] + [k for k,i,d in zip(k_, i_, d_)])
-      xup = xup.reshape(noop_ + flatten([(k, i) for k, i in zip(k_, i_)])).pad(noop_ + flatten([(None, ((k-1)*d, 0)) for k, d in zip(k_, d_)])).reshape(noop_ + [k * (i + (k-1)*d) for k, i, d in zip(k_, i_, d_)])
+      xup = xup.reshape(noop_ + flatten([(k, i) for k, i in zip(k_, i_)])).pad(noop_ + flatten([(None, ((k-0)*d, 0)) for k, d in zip(k_, d_)])).reshape(noop_ + [k * (i + (k-0)*d) for k, i, d in zip(k_, i_, d_)])
       # slice by dilation
-      xup = xup.pad(tuple(noop_ + [(0, k*d) for k, i, d in zip(k_, i_, d_)])).reshape(noop_ + flatten((k,i+d+(k-1)*d) for k,i,d in zip(k_, i_, d_)))
-      xup = xup.shrink(noop_ + flatten((None, ((k-1)*d, i+d+(k-1)*d)) for i, d, k in zip(i_, d_, k_)))
+      xup = xup.pad(tuple(noop_ + [(0, k*d) for k, i, d in zip(k_, i_, d_)])).reshape(noop_ + flatten((k,i+d+(k-0)*d) for k,i,d in zip(k_, i_, d_)))
+      xup = xup.shrink(noop_ + flatten((None, ((k-0)*d, i+d+(k-0)*d)) for i, d, k in zip(i_, d_, k_)))
       # handle stride
       xup = xup.pad(noop_ + flatten((None, (0, (s - (i + d)) % s)) for s, i, d in zip(s_, i_, d_))).reshape(noop_ + flatten((k, (i + d + s - 1) // s, s) for i, d, k, s in zip(i_, d_, k_, s_)))
       xup = xup.shrink(noop_ + flatten(((0,k), (0,o), (0,1)) for k,o in zip(k_, o_))).reshape(noop_ + flatten((k,o) for k,o in zip(k_, o_)))

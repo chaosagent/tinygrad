@@ -279,7 +279,7 @@ class SumNode(RedNode):
   def __mod__(self, b: Union[Node, int]):
     if self == b: return NumNode(0)
     if isinstance(b, Node) and (b - self).min > 0: return self # b - self simplifies the node
-    new_sum = Node.sum([node%b if node.__class__ in (NumNode, MulNode) else node for node in self.nodes])
+    new_sum = Node.sum([node%b if node.__class__ in (NumNode, MulNode, ModNode) else node for node in self.nodes])
     return Node.__mod__(new_sum, b)
 
   def substitute(self, var_vals: Mapping[Variable, Union[NumNode, Variable]]) -> Node:
