@@ -51,12 +51,19 @@ class BenchmarkResnetTrain(unittest.TestCase):
       bns = [layer.bn1, layer.bn2, layer.bn3] + ([layer.downsample[1]] if layer.downsample else [])
       f = [convs[conv-1]]
       if bn: f.append(bns[conv-1])
+      f.append(Tensor.contiguous_backward)
       f.append(Tensor.relu)
       cin = f[0].in_channels
       if conv == 3: xy //= convs[1].stride
       return f"{name} conv{conv} x{str((bs, cin, xy, xy)):20s} k{str(f[0].weight.shape):20s}" + (" bn" if bn else ""), f, cin, xy
 
     cin = layer.conv1.in_channels
+
+    # relu backward is fused with next layer backward
+    class LayerReluContigBackward:
+      def __init__(self, layer): self.layer = layer
+      def __call__(self, x: Tensor): return self.layer(x)._ctx.parents[0].contiguous_backward().relu()
+    layer = LayerReluContigBackward(layer)
     return f"{name} x{(bs, cin, xy, xy)}", [layer], cin, xy
   def _test_layer(self, name, layer, cin, xy):
     optim = SGD(get_parameters(layer), bs / 128 * 1.0)  # need sgd for some params but not consequential for benchmarking
@@ -69,7 +76,7 @@ class BenchmarkResnetTrain(unittest.TestCase):
       optim.zero_grad()
       x.grad = None
 
-      y = x.sequential(layer).contiguous().contiguous_backward()
+      y = x.sequential(layer).contiguous()
       y.sum().backward()
       if getenv("ASSIGN", 1): sched, _ = Tensor.schedule_with_vars(y, x.grad, *optim.schedule_step())
       else: sched, _ = Tensor.schedule_with_vars(y, x.grad, *[t.grad for t in optim.params])
