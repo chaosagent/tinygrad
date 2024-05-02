@@ -116,9 +116,9 @@ def train_resnet():
     top_1 = (out.argmax(-1) == Y).sum()
     (loss * loss_scaler).backward()
     for t in optimizer_group.params: t.grad = t.grad.contiguous() / loss_scaler
-    optimizer_group.step()
+    Tensor.realize(loss, top_1, *optimizer_group.schedule_step())
     scheduler_group.step()
-    return loss.realize(), top_1.realize()
+    return loss, top_1
 
   @TinyJit
   def eval_step(X, Y):
