@@ -19,6 +19,8 @@ actions += [Opt(op=OptOps.PADTO, axis=axis, amt=amt) for amt in [32] for axis in
 actions += [Opt(op=OptOps.LOCAL, axis=0, amt=32), Opt(op=OptOps.UPCASTMID, axis=1, amt=4), Opt(op=OptOps.TC, axis=0, amt=0)]
 actions += [Opt(op=OptOps.TC, axis=axis, amt=getenv("TC_OPT", 2)) for axis in range(9)] # covers resnet kernels (3 global * 3 reduce)
 if getenv("NOLOCALS"): actions += [Opt(op=OptOps.NOLOCALS)]
+pre_actions = [Opt(op=OptOps.UPCAST, axis=axis, amt=amt) for amt in [2, 4] for axis in range(6)]
+pre_actions += [Opt(op=OptOps.UNROLL, axis=axis, amt=amt) for amt in [0] for axis in range(4)]
 
 def _get_test_global_size(global_size, max_global_size, var_vals):
   test_global_size, factor = [sym_infer(sz, var_vals) for sz in global_size], 1
@@ -84,13 +86,18 @@ def bufs_from_lin(lin:Linearizer, allocate:bool=True) -> List[Buffer]:
 # get dictionary of all possible actions
 def get_linearizer_actions(lin:Linearizer, include_0=True) -> Dict[int, Linearizer]:
   acted_lins, max_up, max_lcl = {0:lin} if include_0 else {}, getenv("BEAM_UPCAST_MAX", 256), getenv("BEAM_LOCAL_MAX", 256)
-  for i,a in enumerate(actions):
+  for i,a in enumerate(actions+pre_actions*0):
     if not a.op is OptOps.TC:
       if a.axis is not None and a.axis >= lin.shape_len: continue
       if a.axis is not None and lin.full_shape[a.axis] == a.amt and Opt(a.op, a.axis, 0) in actions: continue
-    lin2 = lin.copy()
     try:
-      lin2.apply_opt(a)
+      if i < len(actions):
+        lin2 = lin.copy()
+        lin2.apply_opt(a)
+      else:
+        lin2 = Linearizer(*lin.ast, opts=lin.opts)
+        lin2.apply_opt(a)
+        for opt in lin.applied_opts: lin2.apply_opt(opt)
       up, lcl, tc_up = 1, 1, prod(tc.dims)//prod([x[1] for x in tc.threads]) if (tc:=lin2.tensor_core) else 1
       for s,c in zip(lin2.full_shape, lin2.colors()):
         if c in {"magenta", "yellow"}: up *= s
@@ -114,7 +121,7 @@ def beam_search(lin:Linearizer, rawbufs:List[Buffer], amt:int, allow_test_size=T
 
   default_parallel = multiprocessing.cpu_count() if lin.opts.device in {"CUDA", "HSA", "AMD", "NV"} else 0
   if beam_pool is None and (workers := getenv("PARALLEL", default_parallel)):
-    beam_pool = multiprocessing.get_context("spawn").Pool(workers, _init_worker, (), getenv("BEAM_MAX_TASKS_PER_CHILD", 16))
+    beam_pool = multiprocessing.get_context("spawn").Pool(workers, _init_worker, (), getenv("BEAM_MAX_TASKS_PER_CHILD", 128))
 
   min_progress_micros = getenv("BEAM_MIN_PROGRESS", 0.01)
 
