@@ -100,7 +100,9 @@ class BenchmarkResnetTrain(unittest.TestCase):
     best_tm = None
     flops, mem_used, mem, kernels = None, None, None, None
     for i in range(CNT):
-      with Context(SAVE_SCHEDULE=0, BEAM=0): x = Tensor.randn(bs, cin, xy, xy, requires_grad=True).realize()
+      with Context(SAVE_SCHEDULE=0, BEAM=0):
+        if not getenv("NHWC"): x = Tensor.randn(bs, cin, xy, xy, requires_grad=True).realize()
+        else: x = Tensor.randn(bs, xy, xy, cin, requires_grad=True).realize().permute(0, 3, 1, 2)
       GlobalCounters.reset()
 
       st = time.perf_counter()

@@ -1035,7 +1035,9 @@ class Tensor:
 
     # conv2d is a pooling op (with padding)
     rcout = cout//groups
-    x = self.reshape(bs, cin_, 1, *self.shape[2:]).pad2d(padding_)._pool(HW, stride, dilation, extra_expand=(2, rcout))   # (bs, groups*cin, oy, ox, H, W)
+    if getenv("NHWC"): x = self.permute(0, 2, 3, 1).contiguous().permute(0, 3, 1, 2)
+    else: x = self
+    x = x.reshape(bs, cin_, 1, *self.shape[2:]).pad2d(padding_)._pool(HW, stride, dilation, extra_expand=(2, rcout))   # (bs, groups*cin, oy, ox, H, W)
     oyx = x.shape[3:-len(HW)]
     if not all(x == 3 for x in HW) or stride != 1 or dilation != 1 or not WINO:
       # normal conv
@@ -1045,7 +1047,9 @@ class Tensor:
       # .expand(bs, groups, rcout, *[1]*len(oyx), cin, *HW)
       ret = (x * weight.reshape(1, groups, rcout, *[1] * len(oyx), cin, *HW)) \
         .sum([-1-i for i in range(1+len(oyx))], keepdim=True, acc_dtype=acc_dtype).reshape(bs, cout, *oyx)  # noqa: E501
-      return ret if bias is None else ret.add(bias.reshape(1, -1, *[1] * len(HW)))
+      ret = ret if bias is None else ret.add(bias.reshape(1, -1, *[1] * len(HW)))
+      if getenv("NHWC"): ret = ret.permute(0, 2, 3, 1).contiguous_backward().permute(0, 3, 1, 2)
+      return ret
 
     HWI, HWO = (6,) * len(HW), (4,) * len(HW)  # F(4x4,3x3) winograd tiles
     winograd_G = [[1/4, 0, 0], [-1/6, -1/6, -1/6], [-1/6, 1/6, -1/6], [1/24, 1/12, 1/6], [1/24, -1/12, 1/6], [0, 0, 1]]
