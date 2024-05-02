@@ -1035,7 +1035,7 @@ class Tensor:
 
     # conv2d is a pooling op (with padding)
     rcout = cout//groups
-    if getenv("NHWC"): x = self.permute(0, 2, 3, 1).contiguous().permute(0, 3, 1, 2)
+    if getenv("NHWC") and all(x == 1 for x in HW): x = self.permute(0, 2, 3, 1).contiguous().permute(0, 3, 1, 2)
     else: x = self
     x = x.reshape(bs, cin_, 1, *self.shape[2:]).pad2d(padding_)._pool(HW, stride, dilation, extra_expand=(2, rcout))   # (bs, groups*cin, oy, ox, H, W)
     oyx = x.shape[3:-len(HW)]
@@ -1048,7 +1048,7 @@ class Tensor:
       ret = (x * weight.reshape(1, groups, rcout, *[1] * len(oyx), cin, *HW)) \
         .sum([-1-i for i in range(1+len(oyx))], keepdim=True, acc_dtype=acc_dtype).reshape(bs, cout, *oyx)  # noqa: E501
       ret = ret if bias is None else ret.add(bias.reshape(1, -1, *[1] * len(HW)))
-      if getenv("NHWC"): ret = ret.permute(0, 2, 3, 1).contiguous_backward().permute(0, 3, 1, 2)
+      if getenv("NHWC") and all(x == 1 for x in HW): ret = ret.permute(0, 2, 3, 1).contiguous_backward().permute(0, 3, 1, 2)
       return ret
 
     HWI, HWO = (6,) * len(HW), (4,) * len(HW)  # F(4x4,3x3) winograd tiles
