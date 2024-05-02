@@ -2,7 +2,7 @@ from typing import List, Dict, Optional, cast, Generator, DefaultDict, Tuple, It
 from collections import defaultdict
 from dataclasses import dataclass
 from tinygrad.dtype import DType
-from tinygrad.helpers import colored, getenv, dedup, DEBUG, GlobalCounters, ansilen
+from tinygrad.helpers import colored, getenv, dedup, DEBUG, GlobalCounters, ansilen, CACHECOLLECTING
 from tinygrad.ops import ScheduleItem, BufferOps, LoadOps, copy_ast
 from tinygrad.device import Runner, Device, BufferCopy, BufferXfer
 from tinygrad.buffer import Buffer
@@ -14,7 +14,7 @@ class ExecItem:
   bufs: List[Optional[Buffer]]
   def run(self, var_vals:Optional[Dict[Variable, int]]=None, wait=False, jit=False, do_update_stats=True) -> Optional[float]:
     et = self.prg([cast(Buffer, x).ensure_allocated() for x in self.bufs], var_vals if var_vals is not None else {}, wait=wait or DEBUG >= 2)
-    if do_update_stats:
+    if do_update_stats and CACHECOLLECTING:
       GlobalCounters.kernel_count += 1
       GlobalCounters.global_ops += (op_estimate:=sym_infer(self.prg.op_estimate, var_vals))
       GlobalCounters.global_mem += (mem_estimate:=sym_infer(self.prg.mem_estimate, var_vals))
@@ -86,5 +86,5 @@ def memory_planner(schedule:List[ScheduleItem]) -> List[ScheduleItem]:
 
 def run_schedule(schedule:List[ScheduleItem], var_vals:Optional[Dict[Variable, int]]=None):
   for ei in lower_schedule(schedule):
-    if len(capturing): capturing[0].add(ei)
+    if len(capturing) and CACHECOLLECTING: capturing[0].add(ei)
     ei.run(var_vals)
