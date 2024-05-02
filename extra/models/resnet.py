@@ -1,7 +1,7 @@
 import tinygrad.nn as nn
 from tinygrad import Tensor, dtypes
 from tinygrad.nn.state import torch_load
-from tinygrad.helpers import fetch, get_child
+from tinygrad.helpers import fetch, get_child, Context
 
 # allow monkeypatching in layer implementations
 BatchNorm = nn.BatchNorm2d
@@ -112,10 +112,11 @@ class ResNet:
     if is_feature_only: features.append(out)
     out = out.sequential(self.layer2)
     if is_feature_only: features.append(out)
-    out = out.sequential(self.layer3)
-    if is_feature_only: features.append(out)
-    out = out.sequential(self.layer4)
-    if is_feature_only: features.append(out)
+    with Context(WINO=1):
+      out = out.sequential(self.layer3)
+      if is_feature_only: features.append(out)
+      out = out.sequential(self.layer4)
+      if is_feature_only: features.append(out)
     if not is_feature_only:
       out = out.mean([2,3])
       out = self.fc(out.cast(dtypes.float32))
