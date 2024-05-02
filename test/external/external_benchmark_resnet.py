@@ -33,6 +33,18 @@ class BenchmarkResnetTrain(unittest.TestCase):
     conv = getenv("CONV", 0)
     bn = getenv("BN", 0)
 
+    if layer_i == -1:
+      conv7x7 = Conv2dHeNormal(3, 64, kernel_size=3, stride=2, padding=1)
+      cin = 3
+      xy = 224
+      name = f"{'input':>13s} conv0 x{str((bs, cin, xy, xy)):20s} k{str(conv7x7.weight.shape):20s}"
+      if not conv or bn:
+        layer = [conv7x7, UnsyncedBatchNorm(64, num_devices=1), Tensor.contiguous_backward, Tensor.relu]
+        name = name + " bn"
+      else:
+        layer = [conv7x7, Tensor.contiguous_backward, Tensor.relu]
+      return name, layer, cin, xy
+
     if not hasattr(self, 'model'):
       resnet.Conv2d = Conv2dHeNormal
       resnet.Linear = Linear
@@ -67,7 +79,7 @@ class BenchmarkResnetTrain(unittest.TestCase):
     return f"{name} x{(bs, cin, xy, xy)}", [layer], cin, xy
   def _test_layer(self, name, layer, cin, xy):
     optim = SGD(get_parameters(layer), bs / 128 * 1.0)  # need sgd for some params but not consequential for benchmarking
-    with Context(SAVE_SCHEDULE=0): Tensor.realize(*[t.assign(t.detach().contiguous()) for t in get_parameters(optim)])
+    with Context(SAVE_SCHEDULE=0, BEAM=0): Tensor.realize(*[t.assign(t.detach().contiguous()) for t in get_parameters(optim)])
 
     JITCNT = getenv("JITCNT", 1)
     Tensor.training = True
@@ -88,7 +100,7 @@ class BenchmarkResnetTrain(unittest.TestCase):
     best_tm = None
     flops, mem_used, mem, kernels = None, None, None, None
     for i in range(CNT):
-      with Context(SAVE_SCHEDULE=0): x = Tensor.randn(bs, cin, xy, xy, requires_grad=True).realize()
+      with Context(SAVE_SCHEDULE=0, BEAM=0): x = Tensor.randn(bs, cin, xy, xy, requires_grad=True).realize()
       GlobalCounters.reset()
 
       st = time.perf_counter()
@@ -106,6 +118,8 @@ class BenchmarkResnetTrain(unittest.TestCase):
           f"{mem_used / 10**9: 6.2f} GB used, {kernels:>5d} kernels")
     return best_tm, flops, mem, kernels
 
+  @unittest.skip
+  def test_layer0(self):   self._est(*self._test_layer(*self._get_layer(-1, 0)), 1)
   def test_layer1_1(self): self._est(*self._test_layer(*self._get_layer(0, 0)), 1)
   def test_layer1_2(self): self._est(*self._test_layer(*self._get_layer(0, 1)), 2)
   def test_layer2_1(self): self._est(*self._test_layer(*self._get_layer(1, 0)), 1)
