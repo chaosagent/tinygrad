@@ -24,6 +24,8 @@ class _Device:
   @functools.lru_cache(maxsize=None)  # this class is a singleton, pylint: disable=method-cache-max-size-none
   def __get_canonicalized_item(self, ix:str) -> Compiled:
     #if DEBUG >= 1: print(f"opening device {ix} from pid:{os.getpid()}")
+    from multiprocessing import current_process
+    if current_process().name != 'MainProcess' and ix in ["CUDA", "NV"]: raise Exception()
     x = ix.split(":")[0].upper()
     return [cls for cname, cls in inspect.getmembers(importlib.import_module(f'tinygrad.runtime.ops_{x.lower()}')) if (cname.lower() == x.lower() + "device") and x in self._devices][0](ix)  # noqa: E501
   @functools.cached_property
