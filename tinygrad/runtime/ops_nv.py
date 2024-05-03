@@ -73,7 +73,7 @@ class NVCompiler(Compiler):
     NVCompiler.compiler_opts = replace(NVCompiler.compiler_opts, has_tensor_cores=int(arch[3:]) >= 80)
     cuda_check(cuda.nvrtcVersion((nvrtcMajor := ctypes.c_int()), (nvrtcMinor := ctypes.c_int())))
     self.compile_options = [f'--gpu-architecture={arch}', "-I/usr/local/cuda/include", "-I/usr/include", "-I/opt/cuda/include/"]
-    if (nvrtcMajor.value, nvrtcMinor.value) >= (12, 4): self.compile_options.append("--minimal")
+    if (nvrtcMajor.value, nvrtcMinor.value) >= (12, 4) and getenv("NVRTC_MINIMAL"): self.compile_options.append("--minimal")
     super().__init__(f"compile_nv_{self.arch}")
   def render(self, name:str, uops) -> str: return CUDARenderer(name, uops)
   def compile(self, src:str) -> bytes:
