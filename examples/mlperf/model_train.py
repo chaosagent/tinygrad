@@ -148,11 +148,11 @@ def train_resnet():
 
       pt = time.perf_counter()
 
+      prev_cookie = None  # free previous cookie after gpu work has been enqueued
       try:
         next_proc = data_get(it)
       except StopIteration:
         next_proc = None
-      prev_cookie = None  # free previous cookie after gpu work has been enqueued
 
       dt = time.perf_counter()
 
