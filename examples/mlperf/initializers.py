@@ -2,7 +2,7 @@ import math
 from typing import Union, Tuple
 
 from tinygrad import Tensor, nn, dtypes
-from tinygrad.helpers import prod, argfix
+from tinygrad.helpers import prod, argfix, getenv
 
 # rejection sampling truncated randn
 def rand_truncn(*shape, dtype=None, truncstds=2, **kwargs) -> Tensor:
@@ -21,10 +21,14 @@ class Conv2dHeNormal(nn.Conv2d):
   def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
     super().__init__(in_channels, out_channels, kernel_size, stride=stride, padding=padding, dilation=dilation, groups=groups, bias=bias)
     self.in_channels, self.out_channels = in_channels, out_channels  # for testing
-    self.weight = he_normal(out_channels, in_channels//groups, *self.kernel_size, a=0.0, dtype=dtypes.float32)
+    if getenv("KRSC"):
+      self.weight = he_normal(out_channels, in_channels//groups, *self.kernel_size, a=0.0, dtype=dtypes.float32)
+    else:
+      self.weight = he_normal(out_channels, *self.kernel_size, in_channels // groups , a=0.0, dtype=dtypes.float32)
     if bias: self.bias = self.bias.cast(dtypes.float32)
   def __call__(self, x: Tensor):
-    return x.conv2d(self.weight.cast(dtypes.default_float), self.bias.cast(dtypes.default_float) if self.bias is not None else None,
+    weight = self.weight.cast(dtypes.default_float) if not getenv("KRSC") else self.weight.cast(dtypes.default_float).permute(0, 3, 1, 2)
+    return x.conv2d(weight, self.bias.cast(dtypes.default_float) if self.bias is not None else None,
                     padding=self.padding, stride=self.stride, dilation=self.dilation, groups=self.groups)
 
 class Linear(nn.Linear):

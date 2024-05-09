@@ -1040,7 +1040,9 @@ class Tensor:
     padding_ = [padding]*2*len(HW) if isinstance(padding, int) else (padding if len(padding) == 2*len(HW) else [p for p in padding for _ in range(2)][::-1])  # noqa: E501
 
     # conv2d is a pooling op (with padding)
-    x = self.pad2d(padding_)._pool(HW, stride, dilation)   # (bs, groups*cin, oy, ox, H, W)
+    x = self
+    if getenv("NHWC") and all(x == 1 for x in HW): x = self.permute(0, 2, 3, 1).contiguous().permute(0, 3, 1, 2)
+    x = x.pad2d(padding_)._pool(HW, stride, dilation)   # (bs, groups*cin, oy, ox, H, W)
     rcout, oyx = cout//groups, x.shape[2:-len(HW)]
     if not all(x == 3 for x in HW) or stride != 1 or dilation != 1 or not WINO:
       # normal conv
@@ -1048,7 +1050,9 @@ class Tensor:
 
       # conv! broadcasted to (bs, groups, rcout, *oyx, cin, *HW)
       ret = (x * weight.reshape(1, groups, rcout, *[1] * len(oyx), cin, *HW)).sum([-1-i for i in range(1+len(oyx))], keepdim=True, acc_dtype=acc_dtype).reshape(bs, cout, *oyx)  # noqa: E501
-      return ret if bias is None else ret.add(bias.reshape(1, -1, *[1] * len(HW)))
+      ret = ret if bias is None else ret.add(bias.reshape(1, -1, *[1] * len(HW)))
+      if getenv("NHWC") and all(x == 1 for x in HW): ret = ret.permute(0, 2, 3, 1).contiguous_backward().permute(0, 3, 1, 2)
+      return ret
 
     HWI, HWO = (6,) * len(HW), (4,) * len(HW)  # F(4x4,3x3) winograd tiles
     winograd_G = [[1/4, 0, 0], [-1/6, -1/6, -1/6], [-1/6, 1/6, -1/6], [1/24, 1/12, 1/6], [1/24, -1/12, 1/6], [0, 0, 1]]
