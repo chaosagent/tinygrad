@@ -185,7 +185,7 @@ def lower_schedule(schedule:List[ScheduleItem]) -> Generator[ExecItem, None, Non
 
 capturing: List = []  # put classes with an add method in here
 
-def run_schedule(schedule:List[ScheduleItem], var_vals:Optional[Dict[Variable, int]]=None, do_update_stats=True, jit_capture=True):
+def run_schedule(schedule:List[ScheduleItem], var_vals:Optional[Dict[Variable, int]]=None, jit_capture=True, do_update_stats=True):
   for ei in lower_schedule(schedule):
     if jit_capture and len(capturing): capturing[0].add(ei)
     ei.run(var_vals, do_update_stats=do_update_stats)
