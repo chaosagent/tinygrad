@@ -176,9 +176,9 @@ class Tensor:
     assert len(var_vals) == 0
     return schedule
 
-  def realize(self, *lst:Tensor, do_update_stats=True) -> Tensor:
+  def realize(self, *lst:Tensor, do_update_stats=True, jit_capture=True) -> Tensor:
     """Triggers the computation needed to create these Tensor(s)."""
-    run_schedule(*self.schedule_with_vars(*lst), do_update_stats=do_update_stats)
+    run_schedule(*self.schedule_with_vars(*lst), do_update_stats=do_update_stats, jit_capture=jit_capture)
     return self
 
   def replace(self, x:Tensor) -> Tensor:
