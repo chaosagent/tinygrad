@@ -175,6 +175,9 @@ class Tensor:
   def device(self) -> Union[str, Tuple[str, ...]]: return self.lazydata.device
 
   @property
+  def axis(self) -> Optional[int]: return self.lazydata.axis if isinstance(self.lazydata, MultiLazyBuffer) else None
+
+  @property
   def shape(self) -> Tuple[sint, ...]: return self.lazydata.shape
 
   @property
@@ -322,9 +325,12 @@ class Tensor:
     """
     Shards the tensor across the given devices.
     """
-    assert isinstance(self.lazydata, LazyBuffer), "can't shard a MultiLazyBuffer"
     canonical_devices = tuple(Device.canonicalize(x) for x in devices)
     if axis is not None and axis < 0: axis += len(self.shape)
+
+    if isinstance(self.lazydata, MultiLazyBuffer):
+      assert canonical_devices == self.lazydata.device, "can only reshard to same set of devices"
+      return Tensor(self.lazydata.reshard(axis), device=canonical_devices, requires_grad=self.requires_grad)
     return Tensor(MultiLazyBuffer.from_sharded(self.lazydata, canonical_devices, axis), device=canonical_devices, requires_grad=self.requires_grad)
 
   def shard_(self, devices:Tuple[str, ...], axis:Optional[int]=None):

@@ -44,7 +44,8 @@ def all_reduce(op: ReduceOps, lbs: List[LazyBuffer]) -> List[LazyBuffer]:
 
 def to_sharded(lbs:List[LazyBuffer], axis:int) -> List[LazyBuffer]:
   if DEBUG >= 3 and lbs[0].shape[axis] % len(lbs) != 0: print(f"multi axis uneven: {lbs[0].shape=} {axis=} {len(lbs)=}")
-  sz = round_up(lbs[0].shape[axis], len(lbs)) // len(lbs)
+  round_align = 32 if lbs[0].shape[axis] > 256 else 1
+  sz = round_up(lbs[0].shape[axis], len(lbs) * round_align) // len(lbs)
   return [lb.shrink(tuple((0,s) if a != axis else (sz*i,min(s,sz*(i+1))) for a,s in enumerate(lb.shape))) for i,lb in enumerate(lbs)]
 
 class MultiLazyBuffer:
@@ -83,6 +84,13 @@ class MultiLazyBuffer:
       pad_arg = tuple((0,0) if a != self.axis else (sz*i, max(0, self.shape[self.axis]-sz*(i+1))) for a in range(len(lb.shape)))
       llbs.append(lb.pad(pad_arg))
     return functools.reduce(lambda x,y: x.e(BinaryOps.ADD, y), llbs)
+
+  def reshard(self, axis):
+    if self.axis == axis: return self
+    lbs = self.lbs
+    if self.axis is not None: lbs = [self.copy_to_device(lb.device) for lb in self.lbs]
+    if axis is not None: lbs = to_sharded(lbs, axis)
+    return MultiLazyBuffer(lbs, axis)
 
   # passthroughs
   def is_realized(self) -> bool: return all(lb.base.realized is not None for lb, r in zip(self.lbs, self.real) if r is True)

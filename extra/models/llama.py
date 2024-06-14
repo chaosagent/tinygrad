@@ -164,6 +164,7 @@ class Transformer:
     freqs_cis = self.freqs_cis.shrink((None, (start_pos, start_pos+seqlen),None,None,None))
 
     h = self.tok_embeddings(tokens)
+    if isinstance(h.device, tuple) and h.axis is not None: h = h.shard(tokens.device, None)  # don't keep activations sharded between blocks
     mask = Tensor.full((1, 1, seqlen, start_pos+seqlen), float("-inf"), dtype=h.dtype, device=h.device).triu(start_pos+1).realize() if seqlen > 1 else None
     for layer in self.layers: h = layer(h, start_pos, freqs_cis, mask)
     logits = self.output(self.norm(h))[:, -1, :]
