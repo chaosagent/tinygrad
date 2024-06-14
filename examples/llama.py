@@ -225,10 +225,20 @@ class LLaMa:
         weights = linear.quantize(weights, device)
         for _,v in weights.items(): v.realize()
 
+      new_weights = {}
+      for k, v in weights.items():
+        if '.attention.wq' in k:
+          kbase = '.'.join(k.split('.')[:-2])
+          new_weights[f"{kbase}.wqkv"] = Tensor.cat(weights[f"{kbase}.wq.weight"], weights[f"{kbase}.wk.weight"], weights[f"{kbase}.wv.weight"], dim=0)
+        elif '.attention.w' not in k or '.attention.wo' in k:
+          new_weights[k] = v
+      weights = new_weights
+
       # shard
       if isinstance(device, tuple):
         for k,v in nn.state.get_state_dict(model).items():
           if 'scale' in k: v.shard_(device, axis=None)  # from quantized
+          elif '.attention.wqkv' in k: v.shard_(device, axis=0)
           elif '.attention.' in k: v.shard_(device, axis=-1)
           elif '.feed_forward.w1' in k: v.shard_(device, axis=0)
           elif '.feed_forward.w3' in k: v.shard_(device, axis=0)

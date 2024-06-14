@@ -330,6 +330,7 @@ class Tensor:
 
     if isinstance(self.lazydata, MultiLazyBuffer):
       assert canonical_devices == self.lazydata.device, "can only reshard to same set of devices"
+      if self.axis == axis: return self
       return Tensor(self.lazydata.reshard(axis), device=canonical_devices, requires_grad=self.requires_grad)
     return Tensor(MultiLazyBuffer.from_sharded(self.lazydata, canonical_devices, axis), device=canonical_devices, requires_grad=self.requires_grad)
 

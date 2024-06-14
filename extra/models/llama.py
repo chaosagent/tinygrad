@@ -48,14 +48,14 @@ class Attention:
     self.n_rep = self.n_heads // self.n_kv_heads
     self.max_context = max_context
 
-    self.wq = linear(dim, self.n_heads * self.head_dim, bias=False)
-    self.wk = linear(dim, self.n_kv_heads * self.head_dim, bias=False)
-    self.wv = linear(dim, self.n_kv_heads * self.head_dim, bias=False)
+    self.wqkv = Tensor.empty(self.n_heads * self.head_dim + 2 * self.n_kv_heads * self.head_dim, dim)
     self.wo = linear(self.n_heads * self.head_dim, dim, bias=False)
 
   def __call__(self, x:Tensor, start_pos:Union[Variable,int], freqs_cis:Tensor, mask:Optional[Tensor]) -> Tensor:
     x = x.half()
-    xq, xk, xv = self.wq(x).half(), self.wk(x).half(), self.wv(x).half()
+    xqkv = x.linear(self.wqkv.transpose(), None).half()
+    if isinstance(xqkv.device, tuple): xqkv = xqkv.shard(xqkv.device, axis=None)
+    xq, xk, xv, xqkv = *xqkv.split([self.n_heads * self.head_dim, self.n_kv_heads * self.head_dim, self.n_kv_heads * self.head_dim], dim=-1), xqkv
     xq = xq.reshape(xq.shape[0], xq.shape[1], self.n_heads, self.head_dim)
     xk = xk.reshape(xk.shape[0], xk.shape[1], self.n_kv_heads, self.head_dim)
     xv = xv.reshape(xv.shape[0], xv.shape[1], self.n_kv_heads, self.head_dim)
