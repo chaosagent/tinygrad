@@ -219,6 +219,16 @@ class LLaMa:
 
     weights = fix_bf16(weights)
 
+    # fuse qkv
+    new_weights = {}
+    for k, v in weights.items():
+      if '.attention.wq' in k:
+        kbase = '.'.join(k.split('.')[:-2])
+        new_weights[f"{kbase}.wqkv.weight"] = Tensor.cat(weights[f"{kbase}.wq.weight"], weights[f"{kbase}.wk.weight"], weights[f"{kbase}.wv.weight"], dim=0)
+      elif '.attention.w' not in k or '.attention.wo' in k:
+        new_weights[k] = v
+    weights = new_weights
+
     with Context(BEAM=0):
       # quantize
       if quantize is not None:
