@@ -61,7 +61,7 @@ class Attention:
     xk = xk.reshape(xk.shape[0], xk.shape[1], self.n_kv_heads, self.head_dim)
     xv = xv.reshape(xv.shape[0], xv.shape[1], self.n_kv_heads, self.head_dim)
 
-    xq, xk = apply_rotary_emb(xq, xk, freqs_cis)
+    xq, xk = apply_rotary_emb(xq, xk, freqs_cis.cast(xq.dtype))
     bsz, seqlen, _, _ = xq.shape
 
     # create kv cache
@@ -195,7 +195,7 @@ def convert_from_huggingface(weights:Dict[str, Tensor], model: Transformer, n_he
   sd = {}
   for k, v in weights.items():
     if ".rotary_emb." in k: continue
-    v = v.to(Device.DEFAULT)
+    #v = v.to(Device.DEFAULT)
     if "model.layers" in k:
       if "q_proj" in k:
         v = permute(v, n_heads)

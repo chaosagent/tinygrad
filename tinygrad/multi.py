@@ -42,7 +42,7 @@ def all_reduce(op: ReduceOps, lbs: List[LazyBuffer]) -> List[LazyBuffer]:
   pads = [((s,dim-e),) for s,e in chunks]
   return [functools.reduce(lambda x,y: x.e(BinaryOps.ADD, y), [c.pad(pads[i]) for i,c in enumerate(lb_c)]).reshape(lbs[0].shape) for lb_c in chunked]
 
-def to_sharded(lbs:List[LazyBuffer], axis:int) -> List[LazyBuffer]:
+def to_sharded(lbs:List[Union[LazyBuffer, MultiLazyBuffer]], axis:int) -> List[LazyBuffer]:
   if DEBUG >= 3 and lbs[0].shape[axis] % len(lbs) != 0: print(f"multi axis uneven: {lbs[0].shape=} {axis=} {len(lbs)=}")
   sz = round_up(lbs[0].shape[axis], len(lbs)) // len(lbs)
   return [lb.shrink(tuple((0,s) if a != axis else (min(s,sz*i),min(s,sz*(i+1))) for a,s in enumerate(lb.shape))) for i,lb in enumerate(lbs)]
@@ -70,8 +70,8 @@ class MultiLazyBuffer:
     return f"<MLB {self.axis=} {self.real=} {chr(10)}{chr(10).join([f'{x.device} {x.st}' for x in self.lbs])}>"
 
   @staticmethod
-  def from_sharded(lb:LazyBuffer, devices:Tuple[str, ...], axis:Optional[int]=None):
-    lbs = [lb.contiguous() if lb.base != lb and not lb.is_unrealized_unmasked_const() else lb] * len(devices)
+  def from_sharded(lb:Union[LazyBuffer, MultiLazyBuffer], devices:Tuple[str, ...], axis:Optional[int]=None):
+    lbs = [lb] * len(devices)
     sharded_lbs = [lb.copy_to_device(d) for lb,d in zip(to_sharded(lbs, axis) if axis is not None else lbs, devices)]
     return MultiLazyBuffer([lb if lb.is_unrealized_unmasked_const() else lb.contiguous(allow_buffer_view=False) for lb in sharded_lbs], axis)
 
@@ -160,12 +160,12 @@ class MultiLazyBuffer:
     # all permutes supported!
     return MultiLazyBuffer([x.permute(arg) for x in self.lbs], arg.index(self.axis) if self.axis is not None else None, self.real)
   def shrink(self, arg:Tuple[Tuple[sint, sint], ...]):
-    assert self.axis is None or arg[self.axis] == (0, self.shape[self.axis]) or arg[self.axis] in self.bounds, f"shrinking not supported for {arg=}"
-    if self.axis is not None and arg[self.axis] in self.bounds and arg[self.axis] != (0, self.shape[self.axis]):
+    if self.axis is not None and arg[self.axis] != (0, self.shape[self.axis]):
       assert all(arg[i] == (0, s) or i == self.axis for i,s in enumerate(self.shape)), "cannot shrink sharded and non-sharded axis at the same time"
-      idx = self.bounds.index(arg[self.axis])
+      l, r = arg[self.axis]
+      idxs = {i: (max(l, bl) - bl, min(r, br) - bl) for i, (bl, br) in enumerate(self.bounds) if max(l, bl) < min(r, br)}
       # zero out other lbs to not create lb reference
-      return MultiLazyBuffer([lb if i==idx else lb.const(0) for i,lb in enumerate(self.lbs)], self.axis, [i==idx for i in range(len(self.lbs))])
+      return MultiLazyBuffer([lb.shrink(tuple(idxs.get(i, (0, 0)) if a == self.axis else s for a,s in enumerate(arg)))for i,lb in enumerate(self.lbs)], self.axis, [i in idxs for i in range(len(self.lbs))])
     return MultiLazyBuffer([x.shrink(tuple((0, x.shape[self.axis]) if a == self.axis else s for a,s in enumerate(arg))) for x in self.lbs],
                            self.axis, self.real)
   def stride(self, arg:Tuple[int, ...]):

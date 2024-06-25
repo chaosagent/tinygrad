@@ -11,6 +11,7 @@ np.set_printoptions(linewidth=200)
 from tinygrad.helpers import Context, Timing, Profiling, getenv, DEBUG, colored
 from tinygrad import Tensor, Device, GlobalCounters, dtypes, nn
 from tinygrad.nn.state import safe_load, torch_load, load_state_dict, get_parameters
+from tinygrad.multi import MultiLazyBuffer
 from extra.models.llama import Transformer, convert_from_huggingface, fix_bf16
 from sentencepiece import SentencePieceProcessor
 import tiktoken, sys
@@ -170,14 +171,15 @@ MODEL_PARAMS = {
 }
 
 # **** helper functions ****
-def concat_weights(models, device=None):
+def concat_weights(models, gen, device=None):
+  first_device = device[0] if isinstance(device, tuple) else device
   def convert(name) -> Tensor:
     disk_tensors: List[Tensor] = [model[name] for model in models]
     if len(disk_tensors) == 1 or len(disk_tensors[0].shape) == 1:
-      return disk_tensors[0].to(device=device)
-    axis = 1 if name.startswith("tok_embeddings.") or name.endswith(".attention.wo.weight") or name.endswith(".feed_forward.w2.weight") else 0
-    lazy_tensors = [data.to(device=device) for data in disk_tensors]
-    return lazy_tensors[0].cat(*lazy_tensors[1:], dim=axis)
+      return disk_tensors[0].to(device=first_device)
+    axis = 1 if (gen != "3" and name.startswith("tok_embeddings.")) or name.endswith(".attention.wo.weight") or name.endswith(".feed_forward.w2.weight") else 0
+    mlb = MultiLazyBuffer([data.to(device=device[i%len(device)] if isinstance(device, tuple) else device).lazydata for i, data in enumerate(disk_tensors)], axis=axis)
+    return Tensor(mlb, device=mlb.device)
   return {name: convert(name) for name in {name: None for model in models for name in model}}
 
 def load(fn:str):
@@ -211,13 +213,13 @@ class LLaMa:
     model = Transformer(**params["args"], linear=linear, max_context=MAX_CONTEXT, jit=jit)
 
     if model_path.is_dir():
-      weights = concat_weights([load(filename) for filename in [f"{model_path}/consolidated.{i:02d}.pth" for i in range(params["files"])]], device[0] if isinstance(device, tuple) else device)
+      weights = concat_weights([load(filename) for filename in [f"{model_path}/consolidated.{i:02d}.pth" for i in range(params["files"])]], model_gen, device)
     else:
       weights = load(str(model_path))
     if "model.embed_tokens.weight" in weights:
       weights = convert_from_huggingface(weights, model, params["args"]["n_heads"], params["args"].get("n_kv_heads", params["args"]["n_heads"]))
 
-    weights = fix_bf16(weights)
+    # weights = fix_bf16(weights)
 
     with Context(BEAM=0):
       # quantize
