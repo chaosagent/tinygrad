@@ -219,7 +219,7 @@ class LLaMa:
     if "model.embed_tokens.weight" in weights:
       weights = convert_from_huggingface(weights, model, params["args"]["n_heads"], params["args"].get("n_kv_heads", params["args"]["n_heads"]))
 
-    # weights = fix_bf16(weights)
+    if Device.DEFAULT != "NV": weights = fix_bf16(weights)
 
     with Context(BEAM=0):
       # quantize
@@ -228,15 +228,17 @@ class LLaMa:
         for _,v in weights.items(): v.realize()
 
       # shard
+      R = 64
       if isinstance(device, tuple):
         for k,v in nn.state.get_state_dict(model).items():
           if 'scale' in k: v.shard_(device, axis=None)  # from quantized
-          elif '.attention.' in k: v.shard_(device, axis=-1)
-          elif '.feed_forward.w1.' in k: v.shard_(device, axis=0)
-          elif '.feed_forward.w3.' in k: v.shard_(device, axis=0)
-          elif '.feed_forward.' in k: v.shard_(device, axis=-1)
-          elif 'tok_embeddings.weight' in k: v.shard_(device, axis=0)
-          elif 'output.weight' in k: v.shard_(device, axis=-1)
+          elif '.attention.wo' in k: v.shard_(device, axis=-1, splits=v.shape[-1] // params["args"].get("n_kv_heads", params["args"]["n_heads"]) if "70" not in model_size else R)
+          elif '.attention.' in k: v.shard_(device, axis=0, splits=v.shape[0] // params["args"].get("n_kv_heads", params["args"]["n_heads"]) if "70" not in model_size else R)
+          elif '.feed_forward.w1.' in k: v.shard_(device, axis=0, splits=R)
+          elif '.feed_forward.w3.' in k: v.shard_(device, axis=0, splits=R)
+          elif '.feed_forward.' in k: v.shard_(device, axis=-1, splits=R)
+          elif 'tok_embeddings.weight' in k: v.shard_(device, axis=0, splits=R)
+          elif 'output.weight' in k: v.shard_(device, axis=-1, splits=R)
           #elif k.endswith('.weight'): v.shard_(device, axis=-1)
           #elif 'norm.' in k: v.shard_(device, axis=-1)
           else: v.shard_(device, axis=None)

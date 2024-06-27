@@ -125,7 +125,7 @@ def load_state_dict(model, state_dict:Dict[str, Tensor], strict=True, verbose=Tr
         if DEBUG >= 1: print(f"WARNING: not loading {k}")
         continue
       if isinstance((mlb:=v.lazydata), MultiLazyBuffer):
-        v.replace(state_dict[k].shard(mlb.device, mlb.axis)).realize()
+        v.replace(state_dict[k].shard(mlb.device, mlb.axis, mlb.splits)).realize()
       else: v.replace(state_dict[k].to(v.device)).realize()
       if consume: del state_dict[k]
 

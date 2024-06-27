@@ -57,9 +57,9 @@ class Attention:
 
   def __call__(self, x:Tensor, start_pos:Union[Variable,int], freqs_cis:Tensor, mask:Optional[Tensor]) -> Tensor:
     xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
-    xq = xq.reshape(xq.shape[0], xq.shape[1], self.n_heads, self.head_dim)
-    xk = xk.reshape(xk.shape[0], xk.shape[1], self.n_kv_heads, self.head_dim)
-    xv = xv.reshape(xv.shape[0], xv.shape[1], self.n_kv_heads, self.head_dim)
+    xq = xq.shard(xq.device, -1, splits=self.n_rep*self.head_dim).reshape(xq.shape[0], xq.shape[1], self.n_heads, self.head_dim)
+    xk = xk.shard(xq.device, -1, splits=self.head_dim).reshape(xk.shape[0], xk.shape[1], self.n_kv_heads, self.head_dim)
+    xv = xv.shard(xq.device, -1, splits=self.head_dim).reshape(xv.shape[0], xv.shape[1], self.n_kv_heads, self.head_dim)
 
     xq, xk = apply_rotary_emb(xq, xk, freqs_cis.cast(xq.dtype))
     bsz, seqlen, _, _ = xq.shape
@@ -69,7 +69,7 @@ class Attention:
       self.cache_kv = Tensor.zeros(2, bsz, self.max_context, self.n_kv_heads, self.head_dim, dtype=x.dtype).contiguous().realize()
       if isinstance(x.device, tuple):
         # TODO: instead of specifying how to shard, it can follow how xk and xv are being sharded
-        self.cache_kv.shard_((x.device), axis=None).realize()
+        self.cache_kv.shard_((x.device), axis=3).realize()
 
     # update the cache
     assert xk.dtype == xv.dtype == self.cache_kv.dtype, f"{xk.dtype=}, {xv.dtype=}, {self.cache_kv.dtype=}"
@@ -81,7 +81,7 @@ class Attention:
     keys, values = repeat_kv(keys, self.n_rep), repeat_kv(values, self.n_rep)
     xq, keys, values = xq.transpose(1, 2), keys.transpose(1, 2), values.transpose(1, 2)
     attn = xq.scaled_dot_product_attention(keys, values, mask).transpose(1, 2)
-    attn = attn.reshape(bsz, seqlen, -1)
+    attn = attn.reshape(bsz, seqlen, -1).shard(attn.device, -1, splits=self.wo.weight.lazydata.splits)
     return self.wo(attn)
 
 class FeedForward:
