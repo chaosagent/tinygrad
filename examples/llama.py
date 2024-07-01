@@ -170,12 +170,12 @@ MODEL_PARAMS = {
 }
 
 # **** helper functions ****
-def concat_weights(models, device=None):
+def concat_weights(models, model_gen, device=None):
   def convert(name) -> Tensor:
     disk_tensors: List[Tensor] = [model[name] for model in models]
     if len(disk_tensors) == 1 or len(disk_tensors[0].shape) == 1:
       return disk_tensors[0].to(device=device)
-    axis = 1 if name.startswith("tok_embeddings.") or name.endswith(".attention.wo.weight") or name.endswith(".feed_forward.w2.weight") else 0
+    axis = 1 if (model_gen != "3" and name.startswith("tok_embeddings.")) or name.endswith(".attention.wo.weight") or name.endswith(".feed_forward.w2.weight") else 0
     lazy_tensors = [data.to(device=device) for data in disk_tensors]
     return lazy_tensors[0].cat(*lazy_tensors[1:], dim=axis)
   return {name: convert(name) for name in {name: None for model in models for name in model}}
@@ -211,7 +211,7 @@ class LLaMa:
     model = Transformer(**params["args"], linear=linear, max_context=MAX_CONTEXT, jit=jit)
 
     if model_path.is_dir():
-      weights = concat_weights([load(filename) for filename in [f"{model_path}/consolidated.{i:02d}.pth" for i in range(params["files"])]], device[0] if isinstance(device, tuple) else device)
+      weights = concat_weights([load(filename) for filename in [f"{model_path}/consolidated.{i:02d}.pth" for i in range(params["files"])]], model_gen, device[0] if isinstance(device, tuple) else device)
     else:
       weights = load(str(model_path))
     if "model.embed_tokens.weight" in weights:
