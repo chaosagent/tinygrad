@@ -16,7 +16,7 @@ from weakref import WeakKeyDictionary
 def apply_graph_to_jit(jit_cache: List[ExecItem], input_rawbuffers: List[Buffer], var_vals: Dict[Variable, int]) -> List[ExecItem]:
   # Split JIT cache into batches for faster graph execution.
   # This allows the accelerator to run some batches while subsequent graphs are still being updated.
-  max_batch_size = getenv("JIT_BATCH_SIZE", 32)
+  max_batch_size = getenv("JIT_BATCH_SIZE", 256)
   graphed_jit_cache: List[ExecItem] = []
   current_batch: List[ExecItem] = []
   current_device: Optional[Compiled] = None
@@ -29,7 +29,7 @@ def apply_graph_to_jit(jit_cache: List[ExecItem], input_rawbuffers: List[Buffer]
       # clear jit inputs to allow their memory to be freed/reused
       for (j,i) in graph_runner.input_replace.keys(): graph_runner.jit_cache[j].bufs[i] = None
       graphed_jit_cache.append(ExecItem(graph_runner, cast(List[Optional[Buffer]], input_rawbuffers)))
-      max_batch_size *= 2
+      max_batch_size = int(max_batch_size * getenv("JIT_MULT", 1.4))
       if DEBUG >= 2: print(f"\tJIT GRAPHing batch with {len(current_batch)} kernels on device {current_device}")
     except GraphException as e:
       graphed_jit_cache.extend(current_batch)
