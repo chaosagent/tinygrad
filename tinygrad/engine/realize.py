@@ -78,6 +78,9 @@ class CompiledRunner(Runner):
     if local_size:
       lra['local_size'] = local_size
       assert len(local_size) == 3, "local size must have len 3"
+    for rawbuf in rawbufs:
+      if rawbuf.device.split(":")[0] in ["NV", "AMD"] and rawbuf.device != self.p.dname:
+        Device[self.p.dname]._gpu_map(rawbuf.base._buf)
     return self.clprg(*[x._buf for x in rawbufs], **lra, vals=tuple(var_vals[k] for k in self.p.vars), wait=wait)
 
 class CustomOp(Runner):
@@ -164,7 +167,7 @@ class ExecItem:
     return et
 
 def lower_schedule_item(si:ScheduleItem) -> ExecItem:
-  assert len(set(x.device for x in si.bufs)) == 1 or si.ast[0].op is LoadOps.COPY or getenv("USE_COPY_KERNEL")
+  assert len(set(x.device for x in si.bufs)) == 1 or si.ast[0].op is LoadOps.COPY or getenv("USE_COPY_KERNEL") or getenv("USE_ALLREDUCE_KERNEL")
   if si.ast[0].op is BufferOps.STORE:
     runner = get_runner(si.outputs[0].device, si.ast)
     return ExecItem(runner, [si.bufs[x[0]] for x in runner.p.globals])

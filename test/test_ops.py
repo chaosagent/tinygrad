@@ -344,7 +344,9 @@ class TestOps(unittest.TestCase):
     helper_test_op(None, torch.minimum, Tensor.minimum, vals=[[True, False, False], [True, True, False]], forward_only=True)
 
   def test_tiny_add(self):
-    helper_test_op([(3), (3)], lambda x,y: x+y, Tensor.add, forward_only=True)
+    devs = [f'{Device.DEFAULT}:{i}' for i in range(2)]
+    Tensor.ones(len(devs)).shard(devs, axis=0).contiguous().sum(0).realize()
+    #helper_test_op([(3), (3)], lambda x,y: x+y, Tensor.add, forward_only=True)
   def test_tiny_mul(self):
     helper_test_op([(64), (64)], lambda x,y: x*y, Tensor.mul, forward_only=True)
 

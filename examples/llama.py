@@ -331,6 +331,7 @@ int main()
 \end{code}
 """
 if __name__ == "__main__":
+  Device[f"{Device.DEFAULT}:4"]
   Tensor.no_grad = True
   print(f"using {Device.DEFAULT} backend")
 
@@ -445,7 +446,7 @@ After you are done speaking, output [EOS]. You are not Chad.
   MODEL_PATH = args.model or Path(__file__).parents[1] / f"weights/LLaMA{LLAMA_SUFFIX}/{args.size}"
   TOKENIZER_PATH = (MODEL_PATH if MODEL_PATH.is_dir() else MODEL_PATH.parent) / "tokenizer.model"
   print(f"using LLaMA{LLAMA_SUFFIX}-{args.size} model")
-  device = tuple(f"{Device.DEFAULT}:{i}" for i in range(args.shard)) if args.shard > 1 else Device.DEFAULT
+  device = tuple(f"{Device.DEFAULT}:{i}" for i in range(args.shard)) if args.shard > 1 or True else Device.DEFAULT
   llama = LLaMa.build(MODEL_PATH, TOKENIZER_PATH, model_gen=args.gen, model_size=args.size, quantize=args.quantize, device=device)
   param_bytes = sum(x.lazydata.size * x.dtype.itemsize for x in get_parameters(llama.model))
 

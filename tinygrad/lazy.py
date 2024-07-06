@@ -116,9 +116,11 @@ class LazyBuffer:
   def _copy(self, device:str) -> LazyBuffer:
     return create_lazybuffer(device, ShapeTracker.from_shape(self.shape), self.dtype, LoadOps.COPY, self.buffer.nbytes, (self,), enable_cache=False)
 
-  def copy_to_device(self, device:str, force: bool = False) -> LazyBuffer:
+  def copy_to_device(self, device:str, force: bool = False, allow_dma=False) -> LazyBuffer:
     # no COPY
     if self.device == device: return self
+
+    if allow_dma and self.device.split(":")[0] == device.split(":")[0]: return create_lazybuffer(device, ShapeTracker.from_shape(self.shape), dtype=self.dtype, op=LoadOps.VIEW, srcs=(self.contiguous(),))
 
     # double COPY = one COPY
     if not force and self.st.contiguous and self.size == self.base.size and not self.base.realized and self.base.op is LoadOps.COPY:

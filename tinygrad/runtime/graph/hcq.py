@@ -133,10 +133,11 @@ class HCQGraph(MultiGraphRunner):
 
     if PROFILE and self.kickoff_value > 1:
       for _,_,(st,en,dev,desc,is_cp) in self.signal_sched.values(): #type: ignore
-        dev.raw_prof_records += [(dev._read_timestamp(st), dev._read_timestamp(en), desc, is_cp)]
+        dev.raw_prof_records += [(dev._gpu2cpu_time(dev._read_timestamp(st), is_cp), dev._gpu2cpu_time(dev._read_timestamp(en), is_cp), desc, is_cp)]
 
     # Update rawbuffers
-    for (j,i),input_idx in self.input_replace.items(): self.ji_args_bufs[j][i] = input_rawbuffers[input_idx]._buf.va_addr
+    for (j,i),input_idx in self.input_replace.items():
+      self.ji_args_bufs[j][i] = input_rawbuffers[input_idx]._buf.va_addr
 
     # Update var_vals
     for j in self.jc_idx_with_updatable_var_vals:

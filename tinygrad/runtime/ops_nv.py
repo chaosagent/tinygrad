@@ -508,6 +508,10 @@ class NVDevice(HCQCompatCompiled):
                              hClient=self.root, hVaSpace=vaspace)
 
     for dev in self.devices:
+      #peer_params = nv_gpu.NV503B_ALLOC_PARAMETERS(hSubDevice=dev.subdevice, hPeerSubDevice=self.subdevice,
+      #                                             l2pBar1P2PDmaInfo=nv_gpu.NV503B_BAR1_P2P_DMA_INFO(dma_address=(1 << 64) - 1, dma_size=0),
+      #                                             p2lBar1P2PDmaInfo=nv_gpu.NV503B_BAR1_P2P_DMA_INFO(dma_address=(1 << 64) - 1, dma_size=0))
+      #rm_alloc(self.fd_ctl, nv_gpu.NV50_P2P, self.root, self.root, peer_params)
       uvm.enable_peer_access(self.fd_uvm, gpuUuidA=nv_gpu.struct_nv_uuid(uuid=self.gpu_uuid), gpuUuidB=nv_gpu.struct_nv_uuid(uuid=dev.gpu_uuid))
 
     if NVDevice.signals_page is None:

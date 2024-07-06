@@ -9,7 +9,7 @@ if [[ ! $(clang2py -V) ]]; then
   pip install clang==14.0.6
   git clone https://github.com/geohot/ctypeslib.git
   cd ctypeslib
-  pip install --user .
+  pip install .
   clang2py -V
   popd
 fi
@@ -110,6 +110,7 @@ generate_nv() {
     $NVKERN_SRC/src/common/sdk/nvidia/inc/class/clc56f.h \
     $NVKERN_SRC/src/nvidia/generated/g_allclasses.h \
     $NVKERN_SRC/src/common/sdk/nvidia/inc/class/clc6c0.h \
+    $NVKERN_SRC/src/common/sdk/nvidia/inc/class/cl503b.h \
     $NVKERN_SRC/kernel-open/nvidia-uvm/clc6b5.h \
     $NVKERN_SRC/kernel-open/nvidia-uvm/uvm_ioctl.h \
     $NVKERN_SRC/kernel-open/nvidia-uvm/uvm_linux_ioctl.h \

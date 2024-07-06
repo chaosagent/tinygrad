@@ -202,10 +202,11 @@ class HCQCompatCompiled(Compiled):
     self.timeline_signal, self._shadow_timeline_signal = timeline_signals
     self.sig_prof_records: List[Tuple[Any, Any, str, bool]] = []
     self.raw_prof_records: List[Tuple[int, int, str, bool]] = []
-    if PROFILE: self._prof_setup()
 
     from tinygrad.runtime.graph.hcq import HCQGraph
     super().__init__(device, allocator, renderer, compiler, runtime, HCQGraph)
+
+    if PROFILE: self._prof_setup()
 
   @classmethod
   def _read_signal(self, sig): raise NotImplementedError("need _read_signal") # reads a value for a signal
@@ -227,25 +228,109 @@ class HCQCompatCompiled(Compiled):
   def _prof_setup(self):
     self.profile_logger = ProfileLogger()
 
-    def _sync_queue(q_t):
+    def _get_ts(q_t):
       q_t().timestamp(self.timeline_signal).signal(self.timeline_signal, self.timeline_value).submit(self)
       self.timeline_value += 1
-      cpu_start_time = time.perf_counter_ns() / 1e3
+      cpu_start_time = time.perf_counter_ns()
       self._wait_signal(self.timeline_signal, self.timeline_value - 1)
       return cpu_start_time, self._read_timestamp(self.timeline_signal)
-    self.cpu_start_time, self.gpu_start_time = _sync_queue(self.hw_compute_queue_t)
-    self.copy_cpu_start_time, self.copy_gpu_start_time = _sync_queue(self.hw_copy_queue_t)
+
+    def _sync_queue(q1_t, q2_t, d1, d2):
+      print('timesync', d1.dname, d2.dname)
+      warmup = 100
+      rounds = 100
+      signals1, signals2 = [d1._get_signal() for _ in range(warmup+rounds+1)], [d2._get_signal() for _ in range(warmup+rounds)]
+      q1, q2 = q1_t(), q2_t()
+      q1.timestamp(signals1[0]).signal(signals1[0], 1)
+      for i in range(warmup+rounds):
+        q2.wait(signals1[i], 1).timestamp(signals2[i]).signal(signals2[i], 1)
+        q1.wait(signals2[i], 1).timestamp(signals1[i+1]).signal(signals1[i+1], 1)
+      q1.signal(d1.timeline_signal, d1.timeline_value)
+      d1.timeline_value += 1
+      if hasattr(q2, 'bind'): q2.bind(d2)
+      if hasattr(q1, 'bind'): q1.bind(d1)
+      st = time.perf_counter_ns()
+      q1.submit(d1)
+      q2.submit(d2)
+      d1._wait_signal(d1.timeline_signal, d1.timeline_value - 1)
+      et = time.perf_counter_ns()
+
+      t1 = [d1._read_timestamp(sig) for sig in signals1[warmup:]]
+      t2 = [d2._read_timestamp(sig) for sig in signals2[warmup:]]
+      midpoints = [(b - a)/2 + a for a, b in zip(t1, t1[1:])]
+      elapsed1 = midpoints[-1] - midpoints[1]
+      elapsed2 = t2[-1] - t2[1]
+      ratio = elapsed2 / elapsed1
+      ratio = 1
+      print('elapsed', elapsed1, elapsed2, ratio, et - st)
+      diffs = [b / ratio - a for a, b in zip(midpoints, t2)]
+      print('diffs', diffs)
+      offset = sorted(diffs)[rounds // 2]  # median-ish
+      ping11 = [b - a for a, b in zip(t1, t1[1:])]
+      ping12 = [(b / ratio - offset) - a for a, b in zip(t1, t2)]
+      ping21 = [b - (a / ratio - offset) for a, b in zip(t2, t1[1:])]
+      print('ping1->1', sum(ping11) / len(ping11), ping11)
+      print('ping1->2', sum(ping12) / len(ping12), ping12)
+      print('ping2->1', sum(ping21) / len(ping21), ping21)
+      return ratio, offset
+    def _sync_queue2(q1_t, q2_t, d1, d2):
+      #print('timesync', d1.dname, d2.dname)
+      warmup = 100
+      rounds = 100
+      signals1, signals2 = [d1._get_signal() for _ in range(warmup+rounds+1)], [d2._get_signal() for _ in range(warmup+rounds)]
+      q1, q2 = q1_t(), q2_t()
+      q1.timestamp(signals1[0]).signal(signals1[0], 1)
+      for i in range(warmup+rounds):
+        q2.wait(signals1[i], 1).timestamp(signals2[i]).signal(signals2[i], 1)
+        q1.wait(signals2[i], 1).timestamp(signals1[i+1]).signal(signals1[i+1], 1)
+      q1.signal(d1.timeline_signal, d1.timeline_value)
+      d1.timeline_value += 1
+      if hasattr(q2, 'bind'): q2.bind(d2)
+      if hasattr(q1, 'bind'): q1.bind(d1)
+      st = time.perf_counter_ns()
+      q2.submit(d2)
+      q1.submit(d1)
+      d1._wait_signal(d1.timeline_signal, d1.timeline_value - 1)
+      et = time.perf_counter_ns()
+
+      t1 = [d1._read_timestamp(sig) for sig in signals1[warmup:]]
+      t2 = [d2._read_timestamp(sig) for sig in signals2[warmup:]]
+
+      diff1 = [b - a for a, b in zip(t1, t2)]
+      diff2 = [a - b for a, b in zip(t1[1:], t2)]
+      ping = [(a + b) // 2 for a, b in zip(diff1, diff2)]
+      offsets = [(a - b) // 2 for a, b in zip(diff1, diff2)]
+      #print('ping', sum(ping) / len(ping), ping)
+      #print('offests', sum(offsets) / len(offsets), offsets)
+      offset = sorted(offsets)[rounds // 2]
+      return 1.0, offset
+    _sync_queue = _sync_queue2
+
+    if len(self.devices) == 1:
+      self.cpu_start_time, self.gpu_start_time = _get_ts(self.hw_compute_queue_t)
+      self.copy_cpu_start_time = self.cpu_start_time
+      self.gpu_time_ratio = 1.0
+      self.copy_time_ratio, copy_off = _sync_queue(self.hw_compute_queue_t, self.hw_copy_queue_t, self, self)
+      self.copy_gpu_start_time = self.gpu_start_time + copy_off
+    else:
+      self.cpu_start_time, self.copy_cpu_start_time = self.devices[0].cpu_start_time, self.devices[0].copy_cpu_start_time
+      self.gpu_time_ratio, gpu_off = _sync_queue(self.hw_copy_queue_t, self.hw_compute_queue_t, self.devices[0], self)
+      self.gpu_start_time = self.devices[0].gpu_start_time + gpu_off
+      self.copy_time_ratio, copy_off = _sync_queue(self.hw_copy_queue_t, self.hw_copy_queue_t, self.devices[0], self)
+      self.copy_gpu_start_time = self.devices[0].gpu_start_time + copy_off
+    self.gpu_start_time = self.copy_gpu_start_time
 
     atexit.register(self._prof_finalize)
 
   def _prof_process_events(self):
-    self.raw_prof_records += [(self._read_timestamp(st), self._read_timestamp(en), name, is_cp) for st, en, name, is_cp in self.sig_prof_records]
+    self.raw_prof_records += [(self._gpu2cpu_time(self._read_timestamp(st), is_cp), self._gpu2cpu_time(self._read_timestamp(en), is_cp), name, is_cp) for st, en, name, is_cp in self.sig_prof_records]
     for st, en, _, _ in self.sig_prof_records: self.signals_pool += [st, en] # type: ignore
     self.sig_prof_records = []
 
   def _prof_finalize(self):
+    self.synchronize()
     for st, en, name, is_cp in self.raw_prof_records:
-      self.profile_logger.events += [(name, self._gpu2cpu_time(st, is_cp), self._gpu2cpu_time(en, is_cp), self.dname, ["COMPUTE", "DMA"][is_cp])]
+      self.profile_logger.events += [(name, st, en, self.dname, ["COMPUTE", "DMA"][is_cp])]
     del self.profile_logger
 
   def _wrap_timeline_signal(self):

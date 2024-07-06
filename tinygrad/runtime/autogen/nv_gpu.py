@@ -1933,7 +1933,7 @@ GF100_DISP_SW = (0x00009072) # macro
 GF100_TIMED_SEMAPHORE_SW = (0x00009074) # macro
 G84_PERFBUFFER = (0x0000844c) # macro
 NV50_MEMORY_VIRTUAL = (0x000050a0) # macro
-NV50_P2P = (0x0000503b) # macro
+NV50_P2P = (0x503b) # macro
 NV50_THIRD_PARTY_P2P = (0x0000503c) # macro
 FERMI_TWOD_A = (0x0000902d) # macro
 FERMI_VASPACE_A = (0x000090f1) # macro
@@ -2517,6 +2517,39 @@ NVC6C0_SET_SHADER_PERFORMANCE_COUNTER_CORE_MIO_FILTER_V = ['31', ':', '0'] # mac
 # def NVC6C0_SET_MME_SHADOW_SCRATCH(i):  # macro
 #    return (0x3400+(i)*4)
 NVC6C0_SET_MME_SHADOW_SCRATCH_V = ['31', ':', '0'] # macro
+NV503B_FLAGS_P2P_TYPE = ['0', ':', '0'] # macro
+NV503B_FLAGS_P2P_TYPE_GPA = 0 # macro
+NV503B_FLAGS_P2P_TYPE_SPA = 1 # macro
+NV503B_ALLOC_PARAMETERS_MESSAGE_ID = (0x503b) # macro
+class struct_NV503B_BAR1_P2P_DMA_INFO(Structure):
+    pass
+
+struct_NV503B_BAR1_P2P_DMA_INFO._pack_ = 1 # source:False
+struct_NV503B_BAR1_P2P_DMA_INFO._fields_ = [
+    ('dma_address', ctypes.c_uint64),
+    ('dma_size', ctypes.c_uint64),
+]
+
+NV503B_BAR1_P2P_DMA_INFO = struct_NV503B_BAR1_P2P_DMA_INFO
+class struct_NV503B_ALLOC_PARAMETERS(Structure):
+    pass
+
+struct_NV503B_ALLOC_PARAMETERS._pack_ = 1 # source:False
+struct_NV503B_ALLOC_PARAMETERS._fields_ = [
+    ('hSubDevice', ctypes.c_uint32),
+    ('hPeerSubDevice', ctypes.c_uint32),
+    ('subDevicePeerIdMask', ctypes.c_uint32),
+    ('peerSubDevicePeerIdMask', ctypes.c_uint32),
+    ('mailboxBar1Addr', ctypes.c_uint64),
+    ('mailboxTotalSize', ctypes.c_uint32),
+    ('flags', ctypes.c_uint32),
+    ('subDeviceEgmPeerIdMask', ctypes.c_uint32),
+    ('peerSubDeviceEgmPeerIdMask', ctypes.c_uint32),
+    ('l2pBar1P2PDmaInfo', NV503B_BAR1_P2P_DMA_INFO),
+    ('p2lBar1P2PDmaInfo', NV503B_BAR1_P2P_DMA_INFO),
+]
+
+NV503B_ALLOC_PARAMETERS = struct_NV503B_ALLOC_PARAMETERS
 _clc6b5_h_ = True # macro
 NVC6B5_NOP = (0x00000100) # macro
 NVC6B5_NOP_PARAMETER = ['31', ':', '0'] # macro
@@ -29955,7 +29988,10 @@ __all__ = \
     'NV2080_VGPU_FB_USAGE', 'NV2080_VGPU_GUEST', 'NV2081_BINAPI',
     'NV2082_BINAPI_PRIVILEGED', 'NV20_SUBDEVICE_0',
     'NV20_SUBDEVICE_DIAG', 'NV30_GSYNC', 'NV40_DEBUG_BUFFER',
-    'NV40_I2C', 'NV4_SOFTWARE_TEST',
+    'NV40_I2C', 'NV4_SOFTWARE_TEST', 'NV503B_ALLOC_PARAMETERS',
+    'NV503B_ALLOC_PARAMETERS_MESSAGE_ID', 'NV503B_BAR1_P2P_DMA_INFO',
+    'NV503B_FLAGS_P2P_TYPE', 'NV503B_FLAGS_P2P_TYPE_GPA',
+    'NV503B_FLAGS_P2P_TYPE_SPA',
     'NV50VAIO_CHANNELDMA_ALLOCATION_FLAGS_CONNECT_PB_AT_GRAB',
     'NV50VAIO_CHANNELDMA_ALLOCATION_FLAGS_CONNECT_PB_AT_GRAB_NO',
     'NV50VAIO_CHANNELDMA_ALLOCATION_FLAGS_CONNECT_PB_AT_GRAB_YES',
@@ -33059,6 +33095,8 @@ __all__ = \
     'struct_NV2080_NOCAT_JOURNAL_RECORD',
     'struct_NV2080_VGPU_FB_USAGE', 'struct_NV2080_VGPU_GUEST',
     'struct_NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PARAMS',
+    'struct_NV503B_ALLOC_PARAMETERS',
+    'struct_NV503B_BAR1_P2P_DMA_INFO',
     'struct_NV83DE_CTRL_CMD_DEBUG_SUSPEND_ALL_CONTEXTS_FOR_CLIENT_PARAMS',
     'struct_NV83DE_CTRL_DEBUG_ACCESS_MEMORY_ENTRY',
     'struct_NV83DE_CTRL_DEBUG_ACCESS_MEMORY_PARAMS',

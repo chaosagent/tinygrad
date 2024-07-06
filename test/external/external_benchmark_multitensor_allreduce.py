@@ -11,7 +11,6 @@ from typing import List, Union
 def realize(x: Union[LazyBuffer, List[LazyBuffer]]):
   x = x if isinstance(x, list) else [x]
   run_schedule(create_schedule(x))
-  for lb in x: Device[lb.device].synchronize()
 
 def test(devs: List[str], N: int, iters:int = 10):
   def _wrapped(op: ReduceOps, t: Tensor) -> Tensor:
@@ -21,10 +20,10 @@ def test(devs: List[str], N: int, iters:int = 10):
   secs, gflops, gbs = 0, 0, 0
   for i in range(-2, iters):
     GlobalCounters.reset()
-    lbs = [Tensor.full((N,), float(1+i), device=d).contiguous().lazydata for i,d in enumerate(devs)]
-    realize(lbs)
+    t = Tensor.full((N*len(devs),), 1.0).shard(devs, axis=0).contiguous().realize()
+    for dev in devs:Device[dev].synchronize()
     start = time.time()
-    realize(_jitted(ReduceOps.SUM, Tensor(MultiLazyBuffer(lbs, 0), device=devs)).lazydata.lbs)
+    realize(_jitted(ReduceOps.SUM, t).lazydata.lbs)
     end = time.time()
     if i < 0:
       # First time is slow due to kernel compilation

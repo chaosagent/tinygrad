@@ -49,7 +49,7 @@ def ioctls_from_header():
   return type("KIO", (object, ), fxns)
 kio = ioctls_from_header()
 
-SIGNAL_SIZE, SIGNAL_COUNT = ctypes.sizeof(hsa.amd_signal_t), 65536
+SIGNAL_SIZE, SIGNAL_COUNT = ctypes.sizeof(hsa.amd_signal_t), 65536 * 4
 SIGNAL_VALUE_OFFSET = getattr(hsa.amd_signal_t, 'value').offset
 
 regBIF_BX_PF1_GPU_HDP_FLUSH_REQ = 0x0106
@@ -406,6 +406,7 @@ class AMDDevice(HCQCompatCompiled):
   signals_page:Any = None
   signals_pool:List[hsa.amd_signal_t] = []
   gpus:List[pathlib.Path] = []
+  devices:List[AMDDevice] = []
 
   def _gpu_map(self, mem):
     if self.gpu_id in getattr(mem, "mapped_gpu_ids", []): return
@@ -537,12 +538,34 @@ class AMDDevice(HCQCompatCompiled):
     self.pm4_write_pointer = to_mv(self.pm4_queue.write_pointer_address, 8).cast("Q")
     self.pm4_doorbell = to_mv(self.doorbells + self.pm4_queue.doorbell_offset - self.doorbells_base, 8).cast("Q")
 
+    AMDDevice.devices.append(self)
+
     super().__init__(device, AMDAllocator(self), AMDRenderer(), AMDCompiler(self.arch), functools.partial(AMDProgram, self), HWPM4Queue, HWCopyQueue,
       timeline_signals=[self._get_signal(sync_event=sync_event), self._get_signal(sync_event=kio.create_event(AMDDevice.kfd, auto_reset=1))])
 
+  def __prof_setup(self):
+    super()._prof_setup()
+    self._reset_clocks()
+
+  def __reset_clocks(self):
+    self.synchronize()
+    counters = kio.get_clock_counters(self.kfd, gpu_id=self.gpu_id)
+    self.t0_cpu = self.t1_cpu = counters.cpu_clock_counter
+    self.t0_gpu = self.t1_gpu = counters.gpu_clock_counter
+    print(self.dname, self.t0_cpu, self.t0_gpu)
+
+  def __gpu2cpu_time(self, gpu_time, is_copy):
+    # 10Hz update
+    if self.t0_gpu == self.t1_gpu or gpu_time > self.t1_gpu + 10:
+      counters = kio.get_clock_counters(self.kfd, gpu_id=self.gpu_id)
+      self.t1_cpu = counters.cpu_clock_counter
+      self.t1_gpu = counters.gpu_clock_counter
+    ratio = (self.t1_cpu - self.t0_cpu) / (self.t1_gpu - self.t0_gpu)
+    return (self.t1_cpu + (gpu_time - self.t1_gpu) * 10) / 1e3
+  
   def _gpu2cpu_time(self, gpu_time, is_copy):
-    if is_copy: return self.copy_cpu_start_time + (gpu_time - self.copy_gpu_start_time) / 1e2
-    return self.cpu_start_time + (gpu_time - self.gpu_start_time) / 1e2
+    if is_copy: return (gpu_time - self.copy_gpu_start_time) / 1e2
+    return (gpu_time - self.gpu_start_time) / 1e2
 
   def synchronize(self):
     AMDDevice._wait_signal(self.timeline_signal, self.timeline_value - 1)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Optional, Union, Any, Tuple, List
 import functools, itertools, operator
-from tinygrad.helpers import all_same, all_int, dedup, round_up, prod, DEBUG, RING
+from tinygrad.helpers import all_same, all_int, dedup, round_up, prod, DEBUG, RING, getenv
 from tinygrad.dtype import DType, ConstType
 from tinygrad.ops import BinaryOps, LoadOps, UnaryOps, TernaryOps, ReduceOps
 from tinygrad.lazy import LazyBuffer
@@ -18,7 +18,11 @@ def all_reduce(op: ReduceOps, lbs: List[LazyBuffer]) -> List[LazyBuffer]:
   use_ring = (RING >= 2 or (n_lbs > 2 and dim > 256_000 and RING >= 1))
   if DEBUG >= 2: print(f"{'RING ALLREDUCE' if use_ring else 'NAIVE ALLREDUCE'} {n_lbs}x{dim} | {lbs[0].dtype}")
   if not use_ring:
-    return [functools.reduce(lambda x,y: x.e(bop, y), [x.copy_to_device(lb.device) for x in lbs]) for lb in lbs]
+    if getenv("USE_ALLREDUCE_KERNEL"):
+      r0 = functools.reduce(lambda x,y: x.e(bop, y), [x.contiguous().copy_to_device(lbs[0].device, allow_dma=dim <= 8192) for x in lbs])
+      return [r0.copy_to_device(lb.device).contiguous() for lb in lbs]
+    else:
+      return [functools.reduce(lambda x, y: x.e(bop, y), [x.copy_to_device(lb.device) for x in lbs]) for lb in lbs]
   factor = max(f for f in [32, 16, 8, 4, 2, 1] if dim % f == 0)
   base, left = (dim // factor) // n_lbs, (dim // factor) % n_lbs
   c_lens = [(base + 1) * factor if i < left else base * factor for i in range(n_lbs)]

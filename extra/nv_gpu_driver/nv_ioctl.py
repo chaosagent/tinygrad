@@ -115,6 +115,11 @@ def ioctl(fd, request, argp):
           dump_struct(sx)
           gpus_fifo.append((sx.gpFifoOffset, sx.gpFifoEntries))
         if s.hClass == nv_gpu.KEPLER_CHANNEL_GROUP_A: dump_struct(get_struct(s.pAllocParms, nv_gpu.NV_CHANNEL_GROUP_ALLOCATION_PARAMETERS))
+        if s.hClass == nv_gpu.NV50_P2P:
+          sx = get_struct(s.pAllocParms, nv_gpu.NV503B_ALLOC_PARAMETERS)
+          dump_struct(sx)
+          dump_struct(sx.l2pBar1P2PDmaInfo)
+          dump_struct(sx.p2lBar1P2PDmaInfo)
       if s.hClass == nv_gpu.TURING_USERMODE_A: gpus_user_modes.append(s.hObjectNew)
     elif nr == nv_gpu.NV_ESC_RM_MAP_MEMORY:
       # nv_ioctl_nvos33_parameters_with_fd
