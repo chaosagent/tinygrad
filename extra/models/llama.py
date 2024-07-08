@@ -101,6 +101,12 @@ class TransformerBlock:
     self.ffn_norm = RMSNorm(dim, norm_eps)
 
   def __call__(self, x:Tensor, start_pos:Union[Variable,int], freqs_cis:Tensor, mask:Optional[Tensor]):
+    from tinygrad.multi import allreduce_prefetch
+    #allreduce_prefetch.append(self.feed_forward.w3.weight.shrink([(0, s // 2) if i == 1 else (0, s) for i, s in enumerate(self.feed_forward.w3.weight.shape)]).lazydata)
+    if True:
+      allreduce_prefetch.append(self.feed_forward.w3.weight.lazydata)
+      #allreduce_prefetch.append(self.feed_forward.w1.weight.lazydata)
+      #allreduce_prefetch.append(self.feed_forward.w2.weight.lazydata)
     h = x + self.attention(self.attention_norm(x), start_pos, freqs_cis, mask)
     return (h + self.feed_forward(self.ffn_norm(h))).contiguous()
 

@@ -7,6 +7,8 @@ from tinygrad.ops import BinaryOps, LoadOps, UnaryOps, TernaryOps, ReduceOps
 from tinygrad.lazy import LazyBuffer
 from tinygrad.shape.shapetracker import sint
 
+allreduce_prefetch = []
+
 def all_reduce(op: ReduceOps, lbs: List[LazyBuffer]) -> List[LazyBuffer]:
   assert all_int(lbs[0].shape), f"does not support symbolic shape {lbs[0].shape}"
   assert all_same([lb.shape[0] for lb in lbs]), "allreduce with uneven shards is undefined"
@@ -18,7 +20,20 @@ def all_reduce(op: ReduceOps, lbs: List[LazyBuffer]) -> List[LazyBuffer]:
   use_ring = (RING >= 2 or (n_lbs > 2 and dim > 256_000 and RING >= 1))
   if DEBUG >= 2: print(f"{'RING ALLREDUCE' if use_ring else 'NAIVE ALLREDUCE'} {n_lbs}x{dim} | {lbs[0].dtype}")
   if not use_ring:
-    return [functools.reduce(lambda x,y: x.e(bop, y), [x.copy_to_device(lb.device) for x in lbs]) for lb in lbs]
+    if allreduce_prefetch:
+      shrunk = [lb.reshape((prod(lb.shape),)).shrink(((0, 1),)) for lb in lbs]
+      pfr = []
+      for plb in allreduce_prefetch:
+        rplbs = [lb.reshape((prod(lb.shape),)) for lb in plb.lbs]
+        # this cast is being pushed by CAST_BEFORE_VIEW?
+        pfr.append([(lb.expand((prod(rplb.shape),)).cast(rplb.dtype).e(BinaryOps.MUL, rplb)).e(BinaryOps.MAX, rplb.const(0)).r(ReduceOps.SUM, (0,)).contiguous() for rplb, lb in zip(rplbs, shrunk)])
+    ret = [functools.reduce(lambda x,y: x.e(bop, y), [x.copy_to_device(lb.device) for x in lbs]) for lb in lbs]
+    if allreduce_prefetch:
+      for pfrlbs in pfr:
+        ret = [lb.e(BinaryOps.ADD, pfrlb.reshape((1,)).expand((prod(lb.shape),)).reshape(lb.shape).cast(lb.dtype).e(UnaryOps.NEG).e(BinaryOps.MAX, lb.const(0))) for pfrlb, lb in zip(pfrlbs, ret)]
+      allreduce_prefetch.clear()
+    #ret = [lb.contiguous() for lb in ret]  # maybe waiting on signals on amd compute queue is a little slow
+    return ret
   factor = max(f for f in [32, 16, 8, 4, 2, 1] if dim % f == 0)
   base, left = (dim // factor) // n_lbs, (dim // factor) % n_lbs
   c_lens = [(base + 1) * factor if i < left else base * factor for i in range(n_lbs)]

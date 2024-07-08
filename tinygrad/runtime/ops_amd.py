@@ -49,7 +49,7 @@ def ioctls_from_header():
   return type("KIO", (object, ), fxns)
 kio = ioctls_from_header()
 
-SIGNAL_SIZE, SIGNAL_COUNT = ctypes.sizeof(hsa.amd_signal_t), 65536
+SIGNAL_SIZE, SIGNAL_COUNT = ctypes.sizeof(hsa.amd_signal_t), 65536 * 4
 SIGNAL_VALUE_OFFSET = getattr(hsa.amd_signal_t, 'value').offset
 
 regBIF_BX_PF1_GPU_HDP_FLUSH_REQ = 0x0106
