@@ -320,17 +320,22 @@ class Tensor:
     if self.grad is not None and real.grad is not None: self.grad.lazydata = real.grad.lazydata
     self.lazydata = real.lazydata
 
-  def shard(self, devices:Tuple[str, ...], axis:Optional[int]=None, splits:Optional[Tuple[int, ...]]=None) -> Tensor:
+  def shard(self, devices:Tuple[str, ...], axis:Optional[int]=None, splits:Optional[Union[int, Tuple[int, ...]]]=None) -> Tensor:
     """
     Shards the tensor across the given devices. Optionally specify which axis to shard on, and how to split it across devices.
+    If `splits` is given as an int, it means the granularity at which the axis will be split.
 
     ```python exec="true" source="above" session="tensor" result="python"
     t = Tensor.empty(2, 3)
     print(t.shard((t.device, t.device), axis=1, splits=(2, 1)).lazydata)
+    print(t.shard((t.device, t.device), axis=1, splits=2).lazydata)
     ```
 
     """
     assert isinstance(self.lazydata, LazyBuffer), "can't shard a MultiLazyBuffer"
+    if isinstance(splits, int):
+      return self.reshape(self.shape[:axis] + (self.shape[axis] // splits, splits) + self.shape[axis + 1:]) \
+                 .shard(devices, axis=axis, splits=None).reshape(self.shape)
     canonical_devices, bounds = tuple(Device.canonicalize(x) for x in devices), None
     if axis is not None:
       if axis < 0: axis += len(self.shape)
@@ -343,7 +348,7 @@ class Tensor:
     return Tensor(MultiLazyBuffer.from_sharded(self.lazydata, canonical_devices, axis, bounds),
                   device=canonical_devices, requires_grad=self.requires_grad)
 
-  def shard_(self, devices:Tuple[str, ...], axis:Optional[int]=None, splits:Optional[Tuple[int, ...]]=None):
+  def shard_(self, devices:Tuple[str, ...], axis:Optional[int]=None, splits:Optional[Union[int, Tuple[int, ...]]]=None):
     """
     Shards the tensor across the given devices in place.
     """

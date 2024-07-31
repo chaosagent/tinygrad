@@ -225,10 +225,13 @@ class LLaMa:
 
       # shard
       if isinstance(device, tuple):
+        n_kv_heads = params["args"]["n_kv_heads"] if "n_kv_heads" in params["args"] else params["args"]["n_heads"]
         for k,v in nn.state.get_state_dict(model).items():
           if 'scale' in k: v.shard_(device, axis=None)  # from quantized
           elif '.attention.' in k:
-            if getenv("SHARD_KVCACHE") and ('.wq.' in k or '.wk.' in k or '.wv.' in k): v.shard_(device, axis=0)
+            if getenv("SHARD_KVCACHE"):
+              if '.wq.' in k or '.wk.' in k or '.wv.' in k: v.shard_(device, axis=0, splits=v.shape[0] // n_kv_heads)
+              elif '.wo.' in k: v.shard_(device, axis=-1, splits=v.shape[-1] // n_kv_heads)
             else: v.shard_(device, axis=-1)
           elif '.feed_forward.w1.' in k: v.shard_(device, axis=0)
           elif '.feed_forward.w3.' in k: v.shard_(device, axis=0)
